@@ -13,7 +13,7 @@ MLOps course project (Northeastern University). The system predicts the probabil
 ## Repository structure
 
 ```
-clinical-trial-termination/
+clinical-trial-termination-prediction/
 |- data/        raw and processed data (DVC-tracked, not committed)
 |- src/         ingestion, features, model, and agent code
 |- pipelines/   pipeline definitions (ingest, train, evaluate, deploy)
@@ -40,8 +40,8 @@ These steps are a plan and will be finalized as the code is built.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/PavanchytanyaD/clinical-trial-termination.git
-   cd clinical-trial-termination
+   git clone https://github.com/PavanchytanyaD/clinical-trial-termination-prediction.git
+   cd clinical-trial-termination-prediction
    ```
 2. Create a virtual environment and install the dependencies:
    ```bash
