@@ -12,7 +12,8 @@ def test_clean_text_missing():
 
 
 def test_clean_text_drops_boilerplate():
-    raw = "Adults with asthma~* Other protocol-defined inclusion criteria may apply."
+    raw = ("Adults with asthma~"
+           "* Other protocol-defined inclusion criteria may apply.")
     assert clean_text(raw) == "Adults with asthma"
 
 
@@ -34,7 +35,8 @@ def test_split_header_variants():
 
 
 def test_split_header_with_inline_tail_and_none():
-    e = split_eligibility("Inclusion: healthy volunteers~Exclusion criteria: none")
+    e = split_eligibility(
+        "Inclusion: healthy volunteers~Exclusion criteria: none")
     assert e.inclusion == ["healthy volunteers"]
     assert e.exclusion == []
 
@@ -52,8 +54,8 @@ def test_split_no_headers():
 
 
 def test_criterion_mentioning_exclusion_is_not_a_header():
-    raw = ("Inclusion Criteria:~* Patients who met all exclusion criteria of the parent study "
-           "and completed follow-up")
+    raw = ("Inclusion Criteria:~* Patients who met all exclusion criteria "
+           "of the parent study and completed follow-up")
     e = split_eligibility(raw)
     assert e.exclusion == []
     assert len(e.inclusion) == 1
