@@ -1,0 +1,65 @@
+# Settings for the bias detection step (data slicing).
+# Change values here instead of editing the code.
+
+input:
+  # Where the trial data comes from:
+  #   aact - query the AACT database directly (needs AACT_USER and
+  #          AACT_PASSWORD in the environment)
+  #   file - read a CSV or Parquet file, e.g. the preprocessing output
+  source: aact
+  file_path: data/processed/trials.csv
+  # Number of trials to pull from AACT; null means all trials.
+  # Use a small number (e.g. 20000) for a quick test run.
+  limit: null
+  # Name this code uses -> column name in the input file.
+  # Only used when source is "file". Fill in once the preprocessing
+  # output is final; right now every name maps to itself.
+  columns:
+    nct_id: nct_id
+    overall_status: overall_status
+    phase: phase
+    study_type: study_type
+    start_date: start_date
+    sponsor_class: sponsor_class
+    gender: gender
+    child: child
+    adult: adult
+    older_adult: older_adult
+    countries: countries
+    therapeutic_areas: therapeutic_areas
+
+slices:
+  # Slices to build and report on. Remove a name to skip that slice.
+  names:
+    - phase
+    - study_type
+    - sponsor_class
+    - region
+    - therapeutic_area
+    - gender
+    - age_group
+    - start_era
+  # Start-year edges for start_era: before 2000, 2000-2009, 2010-2017,
+  # 2018 and later.
+  start_year_edges: [2000, 2010, 2018]
+
+report:
+  # A group is flagged "too small" if it has less than this share of the
+  # finished trials.
+  min_share: 0.01
+  # A group is flagged "large gap" if its stopped rate differs from the
+  # overall stopped rate by more than this (0.10 = 10 percentage points).
+  max_rate_gap: 0.10
+  output_dir: reports/bias
+  # The trials with their slice columns, for the mitigation step and splits.
+  slices_path: data/processed/trial_slices.csv
+
+model:
+  # CSV with columns nct_id and y_score (predicted probability of
+  # stopping) from a trained model. null skips the model report.
+  predictions_path: null
+  # Score at or above this counts as "predicted stopped".
+  threshold: 0.5
+  # Groups smaller than this are left out of the gap calculation,
+  # because metrics on a handful of trials are mostly noise.
+  min_group_size: 100
