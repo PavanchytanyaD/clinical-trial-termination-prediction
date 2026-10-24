@@ -65,7 +65,7 @@ def test_group_shares_counts_multi_value_trial_in_each_group():
 
 def test_small_group_gets_higher_weight():
     df = make_trials()
-    w, boosted = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
+    w, boosted, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
     nih = df["sponsor_class"] == "NIH"
     assert w[nih].min() > w[~nih].max()
     assert [b["group"] for b in boosted] == ["NIH"]
@@ -73,7 +73,7 @@ def test_small_group_gets_higher_weight():
 
 def test_unknown_group_is_not_boosted():
     df = make_trials()
-    w, boosted = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
+    w, boosted, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
     unknown = df["sponsor_class"].isna()
     industry = df["sponsor_class"] == "INDUSTRY"
     assert w[unknown].max() == pytest.approx(w[industry].max())
@@ -82,7 +82,7 @@ def test_unknown_group_is_not_boosted():
 
 def test_weights_have_mean_one_and_respect_cap():
     df = make_trials(n_big=995, n_small=1, n_unknown=0)
-    w, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=5)
+    w, _, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=5)
     assert w.mean() == pytest.approx(1.0)
     assert w.max() <= 5 + 1e-9
     assert (w > 0).all()
@@ -90,7 +90,7 @@ def test_weights_have_mean_one_and_respect_cap():
 
 def test_no_small_groups_gives_equal_weights():
     df = make_trials(n_big=50, n_small=50, n_unknown=0)
-    w, boosted = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
+    w, boosted, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
     assert np.allclose(w, 1.0)
     assert boosted == []
 
@@ -98,7 +98,7 @@ def test_no_small_groups_gives_equal_weights():
 def test_multi_area_trial_keeps_largest_factor():
     areas = ["common"] * 96 + ["common|rare"] * 2 + ["common|rarer"]
     df = pd.DataFrame({"label": [0] * len(areas), "area": areas})
-    w, _ = compute_weights(df, ["area"], min_share=0.05, max_weight=100)
+    w, _, _ = compute_weights(df, ["area"], min_share=0.05, max_weight=100)
     rare = w[df["area"] == "common|rare"].iloc[0]
     rarer = w[df["area"] == "common|rarer"].iloc[0]
     assert rarer > rare > w[df["area"] == "common"].iloc[0]
@@ -106,7 +106,7 @@ def test_multi_area_trial_keeps_largest_factor():
 
 def test_weight_cap_can_leave_group_below_target():
     df = make_trials(n_big=999, n_small=1, n_unknown=0)
-    w, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=2)
+    w, _, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=2)
     table = before_after(df, df, ["sponsor_class"], "label", 0.05, after_weights=w)
     nih = table[table["group"] == "NIH"].iloc[0]
     assert nih["share_after"] > nih["share_before"]
@@ -122,9 +122,34 @@ def test_two_slices_both_reach_target():
             "b": ["tiny"] * 5 + ["y"] * 995,
         }
     )
-    w, _ = compute_weights(df, ["a", "b"], min_share=0.02, max_weight=10)
+    w, _, _ = compute_weights(df, ["a", "b"], min_share=0.02, max_weight=10)
     table = before_after(df, df, ["a", "b"], "label", 0.02, after_weights=w)
     assert not table["too_small_after"].any()
+
+
+def test_group_below_min_group_size_is_not_boosted():
+    df = make_trials()  # NIH has 3 trials
+    w, boosted, too_few = compute_weights(
+        df, ["sponsor_class"], min_share=0.05, max_weight=10, min_group_size=5
+    )
+    assert np.allclose(w, 1.0)
+    assert boosted == []
+    assert too_few == [{"slice": "sponsor_class", "group": "NIH", "n_trials": 3, "share": 0.03}]
+
+
+def test_group_at_min_group_size_is_boosted():
+    df = make_trials()
+    _, boosted, too_few = compute_weights(
+        df, ["sponsor_class"], min_share=0.05, max_weight=10, min_group_size=3
+    )
+    assert [b["group"] for b in boosted] == ["NIH"]
+    assert boosted[0]["n_trials"] == 3
+    assert too_few == []
+
+
+def test_negative_min_group_size_raises():
+    with pytest.raises(ValueError):
+        compute_weights(make_trials(), ["sponsor_class"], 0.05, 10, min_group_size=-1)
 
 
 @pytest.mark.parametrize("min_share,max_weight", [(0, 10), (1.5, 10), (0.05, 0.5)])
@@ -148,7 +173,7 @@ def test_effective_sample_size():
 
 def test_reweight_lifts_small_group_share():
     df = make_trials()
-    w, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
+    w, _, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
     table = before_after(df, df, ["sponsor_class"], "label", 0.05, after_weights=w)
     nih = table[table["group"] == "NIH"].iloc[0]
     assert nih["share_before"] == pytest.approx(0.03)
@@ -158,7 +183,7 @@ def test_reweight_lifts_small_group_share():
 
 def test_resample_same_size_and_reproducible():
     df = make_trials()
-    w, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
+    w, _, _ = compute_weights(df, ["sponsor_class"], min_share=0.05, max_weight=10)
     a = resample(df, w, seed=1)
     b = resample(df, w, seed=1)
     assert len(a) == len(df)
@@ -179,6 +204,7 @@ def _config(tmp_path, method="reweight"):
             "output_dir": str(tmp_path / "out"),
             "slices": ["sponsor_class", "therapeutic_area"],
             "min_share": 0.05,
+            "min_group_size": 0,
             "method": method,
         }
     }
@@ -194,6 +220,15 @@ def test_run_writes_outputs(tmp_path, method):
     assert saved["method"] == method
     assert saved["n_trials"] == 99
     assert summary["boosted_groups"][0]["group"] == "NIH"
+
+
+def test_run_reports_too_few_groups(tmp_path):
+    cfg = _config(tmp_path)
+    cfg["mitigation"]["min_group_size"] = 10
+    summary = run(cfg)
+    assert summary["boosted_groups"] == []
+    assert [g["group"] for g in summary["too_few_to_mitigate"]] == ["NIH"]
+    assert summary["still_too_small"] == []  # too-few groups are not double-reported
 
 
 def test_run_missing_input_raises(tmp_path):

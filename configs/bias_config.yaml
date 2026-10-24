@@ -63,3 +63,25 @@ model:
   # Groups smaller than this are left out of the gap calculation,
   # because metrics on a handful of trials are mostly noise.
   min_group_size: 100
+  
+mitigation:
+  # Reads the trial_slices.csv written by bias detection.
+  input_path: data/processed/trial_slices.csv
+  output_dir: reports/bias/mitigation
+  id_column: nct_id
+  label_column: label          # TODO: confirm from trial_slices.csv
+  multi_value_sep: "|"
+  slices:
+    - phase
+    - study_type
+    - sponsor_class
+    - region
+    - therapeutic_area
+    - gender
+    - age_group
+    - start_era
+  skip_groups: [UNKNOWN]
+  method: reweight             # reweight or resample
+  min_share: 0.01              # keep equal to report.min_share
+  max_weight: 10.0
+  random_seed: 42

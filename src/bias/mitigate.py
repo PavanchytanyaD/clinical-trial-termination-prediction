@@ -67,7 +67,8 @@ def compute_weights(
     sep: str = "|",
     skip_groups: tuple[str, ...] = (UNKNOWN,),
     max_rounds: int = 20,
-) -> tuple[pd.Series, list[dict]]:
+    min_group_size: int = 0,
+) -> tuple[pd.Series, list[dict], list[dict]]:
     """Give trials in small groups a weight above 1.
 
     For every slice, a group with share s below min_share (m) has its trials'
@@ -78,7 +79,12 @@ def compute_weights(
     very tiny group may stay below m, and then scaled to mean 1 so the total
     size of the data stays the same.
 
-    Returns the weights (same index as df) and a list describing each boosted group.
+    Groups with fewer than min_group_size trials are not boosted: weighting a
+    handful of trials up only amplifies noise. They are returned separately so
+    the report can list them as "too few trials to mitigate".
+
+    Returns the weights (same index as df), the boosted groups, and the groups
+    that were too small to boost.
     """
     if not 0 < min_share < 1:
         raise ValueError("min_share must be between 0 and 1")
@@ -86,19 +92,31 @@ def compute_weights(
         raise ValueError("max_weight must be at least 1")
     if df.empty:
         raise ValueError("no finished trials to weight")
+    if min_group_size < 0:
+        raise ValueError("min_group_size must be 0 or more")
     for col in slices:
         if col not in df.columns:
             raise KeyError(f"slice column '{col}' not found in slice table")
 
     tol = SHARE_TOL * min_share
     groups = {col: split_values(df[col], sep) for col in slices}
+    counts = {col: groups[col].explode().value_counts() for col in slices}
+
+    def boostable(col: str, shares: pd.Series) -> pd.Series:
+        """Groups below min_share that are not skipped and have enough trials."""
+        n = counts[col].reindex(shares.index).fillna(0)
+        return shares[
+            (shares < min_share - tol)
+            & (~shares.index.isin(skip_groups))
+            & (n >= min_group_size)
+        ]
+
     w = np.ones(len(df))
 
     for _ in range(max_rounds):
         changed = False
         for col in slices:
-            shares = group_shares(df, col, sep, w)
-            small = shares[(shares < min_share - tol) & (~shares.index.isin(skip_groups))]
+            small = boostable(col, group_shares(df, col, sep, w))
             if small.empty:
                 continue
             group_factor = (min_share * (1 - small) / (small * (1 - min_share))).to_dict()
@@ -114,20 +132,28 @@ def compute_weights(
     weights = pd.Series(w, index=df.index, name="weight")
 
     boosted: list[dict] = []
+    too_few: list[dict] = []
     for col in slices:
         shares = group_shares(df, col, sep)
-        small = shares[(shares < min_share - tol) & (~shares.index.isin(skip_groups))]
-        for group, share in small.items():
+        for group, share in boostable(col, shares).items():
             in_group = groups[col].map(lambda gs, g=group: g in gs)
             boosted.append(
                 {
                     "slice": col,
                     "group": group,
+                    "n_trials": int(counts[col][group]),
                     "share_before": float(share),
                     "mean_weight": float(weights[in_group].mean()),
                 }
             )
-    return weights, boosted
+        small = shares[(shares < min_share - tol) & (~shares.index.isin(skip_groups))]
+        for group, share in small.items():
+            n = int(counts[col].get(group, 0))
+            if n < min_group_size:
+                too_few.append(
+                    {"slice": col, "group": group, "n_trials": n, "share": float(share)}
+                )
+    return weights, boosted, too_few
 
 
 def effective_sample_size(weights) -> float:

@@ -54,6 +54,7 @@ DEFAULTS = {
     "method": "reweight",
     "min_share": 0.01,
     "max_weight": 10.0,
+    "min_group_size": 100,
     "random_seed": 42,
 }
 
@@ -103,15 +104,20 @@ def run(config: dict) -> dict:
     df = labeled_trials(df, label)
     logger.info("loaded %d finished trials", len(df))
 
-    weights, boosted = compute_weights(
+    weights, boosted, too_few = compute_weights(
         df,
         slices,
         min_share=cfg["min_share"],
         max_weight=cfg["max_weight"],
         sep=sep,
         skip_groups=tuple(cfg["skip_groups"]),
+        min_group_size=cfg["min_group_size"],
     )
     logger.info("boosted %d small groups", len(boosted))
+    for g in too_few:
+        logger.warning(
+            "too few trials to mitigate: %s=%s (%d trials)", g["slice"], g["group"], g["n_trials"]
+        )
 
     pd.DataFrame({cfg["id_column"]: df[cfg["id_column"]], "weight": weights}).to_csv(
         out_dir / "trial_weights.csv", index=False
@@ -134,7 +140,13 @@ def run(config: dict) -> dict:
 
     table.to_csv(out_dir / "mitigation_before_after.csv", index=False)
 
-    still_small = table[table["too_small_after"] & ~table["group"].isin(cfg["skip_groups"])]
+    # Groups we tried to boost but the weight cap stopped. Too-few groups are reported separately.
+    too_few_keys = {(g["slice"], g["group"]) for g in too_few}
+    still_small = table[
+        table["too_small_after"]
+        & ~table["group"].isin(cfg["skip_groups"])
+        & ~pd.Series(list(zip(table["slice"], table["group"]))).isin(too_few_keys)
+    ]
     for row in still_small.itertuples():
         logger.warning(
             "still too small after mitigation: %s=%s (share %.4f)", row.slice, row.group, row.share_after
@@ -147,7 +159,9 @@ def run(config: dict) -> dict:
         "overall_stopped_rate_before": round(overall_stopped_rate(df, label), 4),
         "overall_stopped_rate_after": round(rate_after, 4),
         "max_weight_used": round(float(weights.max()), 3),
+        "min_group_size": cfg["min_group_size"],
         "boosted_groups": boosted,
+        "too_few_to_mitigate": too_few,
         "still_too_small": [
             {"slice": r.slice, "group": r.group, "share_after": _clean(float(r.share_after))}
             for r in still_small.itertuples()
