@@ -1,0 +1,122 @@
+{
+  "n_trials": 608221,
+  "n_finished": 385942,
+  "n_unfinished": 222279,
+  "overall_stopped_rate": 0.138,
+  "min_share": 0.01,
+  "max_rate_gap": 0.1,
+  "flagged_groups": [
+    {
+      "slice": "phase",
+      "group": "EARLY_PHASE1",
+      "share": 0.0091,
+      "stopped_rate": 0.2287,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "phase",
+      "group": "PHASE1/PHASE2",
+      "share": 0.0269,
+      "stopped_rate": 0.2759,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "study_type",
+      "group": "EXPANDED_ACCESS",
+      "share": 0.0,
+      "stopped_rate": null,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "study_type",
+      "group": "UNKNOWN",
+      "share": 0.0,
+      "stopped_rate": null,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "AMBIG",
+      "share": 0.0,
+      "stopped_rate": 0.3333,
+      "too_small": true,
+      "large_gap": true
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "FED",
+      "share": 0.0099,
+      "stopped_rate": 0.1237,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "INDIV",
+      "share": 0.001,
+      "stopped_rate": 0.1552,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "NETWORK",
+      "share": 0.0091,
+      "stopped_rate": 0.1578,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "UNKNOWN",
+      "share": 0.0001,
+      "stopped_rate": 0.0652,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "disorders of environmental origin",
+      "share": 0.0001,
+      "stopped_rate": 0.0476,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "occupational diseases",
+      "share": 0.0012,
+      "stopped_rate": 0.0735,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "gender",
+      "group": "UNKNOWN",
+      "share": 0.0008,
+      "stopped_rate": 0.0606,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "age_group",
+      "group": "UNKNOWN",
+      "share": 0.0,
+      "stopped_rate": null,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "start_era",
+      "group": "UNKNOWN",
+      "share": 0.0075,
+      "stopped_rate": 0.2414,
+      "too_small": true,
+      "large_gap": true
+    }
+  ]
+}
