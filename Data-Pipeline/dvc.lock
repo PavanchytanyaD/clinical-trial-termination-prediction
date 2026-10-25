@@ -1,0 +1,130 @@
+schema: '2.0'
+stages:
+  acquire:
+    cmd: python -m scripts.acquire
+    deps:
+    - path: scripts/acquire.py
+      hash: md5
+      md5: 1ce3fd7bd424f417e6b9a8ac275d89b5
+      size: 4724
+    - path: scripts/sample_snapshot.py
+      hash: md5
+      md5: bf2ec18fbaef4ce11f0ac14d8c5e0ef9
+      size: 10858
+    params:
+      params.yaml:
+        acquire:
+          source: sample
+          zip: ''
+          snapshot: '20261001'
+          sample_trials: 500
+          seed: 42
+    outs:
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 21448c7a1cad1a77cbd08b2a61119e5f.dir
+      size: 678731
+      nfiles: 13
+  preprocess:
+    cmd: python -m scripts.preprocess
+    deps:
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 21448c7a1cad1a77cbd08b2a61119e5f.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/preprocess.py
+      hash: md5
+      md5: 4fa2801ca371f89ce01ee9576de6bb40
+      size: 6818
+    params:
+      params.yaml:
+        preprocess:
+          mode: auto
+    outs:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 79cd136a8ab2b26cddbb7d3d204602d7
+      size: 44301
+    - path: data/processed/structured_features.meta.json
+      hash: md5
+      md5: 373c527c95b3c1c3dd67654880c7c49a
+      size: 714
+  schema_stats:
+    cmd: python -m scripts.schema_stats
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 79cd136a8ab2b26cddbb7d3d204602d7
+      size: 44301
+    - path: scripts/schema_stats.py
+      hash: md5
+      md5: 3c95ad1bac9b7ed993314fdab1ecd744
+      size: 14345
+    params:
+      params.yaml:
+        schema:
+          min_rows: 100
+          range_slack: 0.5
+          mostly: 0.99
+          max_missing_increase: 0.05
+          categorical_max_distinct: 50
+    outs:
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 2e29913b60adc2677bf88370004926e0
+      size: 7885
+    - path: reports/statistics/statistics.md
+      hash: md5
+      md5: ae61c105ac4b3a500aa8f3f80c28629d
+      size: 1784
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 6a8a3ffb2286a57467cca34c50cfab6e
+      size: 20765
+  validate:
+    cmd: python -m scripts.validate
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 79cd136a8ab2b26cddbb7d3d204602d7
+      size: 44301
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 2e29913b60adc2677bf88370004926e0
+      size: 7885
+    - path: schema/baseline
+      hash: md5
+      md5: c8baf21055ed1231a003235988f72377.dir
+      size: 648
+      nfiles: 1
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 6a8a3ffb2286a57467cca34c50cfab6e
+      size: 20765
+    - path: scripts/validate.py
+      hash: md5
+      md5: ac89e61084f9a5f4467ce322d5184a7e
+      size: 12576
+    params:
+      params.yaml:
+        validate:
+          fail_on: critical
+          alert_on: warning
+          max_row_change: 0.5
+          max_stopped_rate_change: 0.05
+          max_missing_increase: 0.05
+          max_mean_shift_std: 0.5
+    outs:
+    - path: reports/validation/summary.json
+      hash: md5
+      md5: ff180c1797a464f95273fae4e1e7dd36
+      size: 255
+    - path: reports/validation/validation.json
+      hash: md5
+      md5: 3fbf717a309004aca7b769bdf19e065a
+      size: 29653
+    - path: reports/validation/validation.md
+      hash: md5
+      md5: 47ad33bd35154af84072b37929188bf6
+      size: 190

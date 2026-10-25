@@ -1,0 +1,11 @@
+{
+  "validated_at": "2026-10-24T14:39:59+00:00",
+  "snapshot": "20261001",
+  "suite": "current snapshot (no baseline frozen yet)",
+  "checks": 67,
+  "passed": 67,
+  "failed_critical": 0,
+  "failed_warning": 0,
+  "success": true,
+  "stop_pipeline": false
+}
