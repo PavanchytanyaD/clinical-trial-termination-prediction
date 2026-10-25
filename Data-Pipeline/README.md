@@ -303,10 +303,11 @@ discussed in `../docs/bias_report.md`.
 ## 9. Pipeline flow optimization
 
 The Airflow Gantt chart of a sequential run showed every task waiting for the
-previous one, although `bias` needs only the raw snapshot and
+previous one, although `bias` and `text` need only the raw snapshot and
 `schema_stats` and `anomalies` need only the features. Running them in
-parallel shortens the run. Measurements on the VM, both Gantt charts and
-how to reproduce them: `docs/pipeline_optimization.md`.
+parallel, so all of that work now happens while the Vertex AI GPU job runs,
+cut a 50,000-trial run on the VM from 702.5 s to 607.5 s. Both Gantt charts
+and how to reproduce them: `docs/pipeline_optimization.md`.
 
 ## Interface for the acquisition and preprocessing code
 
