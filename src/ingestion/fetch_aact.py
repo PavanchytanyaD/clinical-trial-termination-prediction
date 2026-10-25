@@ -31,7 +31,7 @@ from pathlib import Path
 import requests
 
 from src.error_handling import (ConfigError, DataUnavailableError,
-                                 DataValidationError)
+                                DataValidationError)
 from src.logging_utils import run_main
 
 logger = logging.getLogger(__name__)

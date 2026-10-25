@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.error_handling import (ConfigError, DataUnavailableError,
-                                 DataValidationError)
+                                DataValidationError)
 
 logger = logging.getLogger(__name__)
 

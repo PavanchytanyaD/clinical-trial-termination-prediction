@@ -69,6 +69,7 @@ SOURCE = ('{{ dag_run.conf.get("source") or '
 ZIP = ('{{ dag_run.conf.get("zip") or '
        + json.dumps(os.environ.get("CTT_ZIP", "")) + " }}")
 
+
 def log_failure(context):
     """Write one clear line per failed task (Cloud Logging picks it up)."""
     ti = context["task_instance"]

@@ -6,6 +6,9 @@
 #
 # Paths starting with ../ are the team's shared code in src/ and configs/ at
 # the repository root: changing that code re-runs the stages that use it.
+# They are listed file by file, not as folders, because DVC would otherwise
+# also hash the __pycache__ folders Python writes there. Add a file here when
+# a stage starts importing it.
 #
 #   acquire --+--> preprocess --+--> schema_stats --> validate
 #             |                 +--> anomalies
@@ -16,7 +19,9 @@ stages:
     deps:
       - scripts/acquire.py
       - scripts/sample_snapshot.py
-      - ../src/ingestion
+      - ../src/ingestion/fetch_aact.py
+      - ../src/error_handling.py
+      - ../src/logging_utils.py
     params:
       - acquire
     outs:
@@ -27,7 +32,9 @@ stages:
     deps:
       - data/raw/aact_snapshot
       - scripts/preprocess.py
-      - ../src/features
+      - ../src/features/structured_features.py
+      - ../src/features/build_text_sample.py
+      - ../src/features/text_cleaning.py
     params:
       - preprocess
     outs:
@@ -39,7 +46,13 @@ stages:
     deps:
       - data/raw/aact_snapshot
       - scripts/bias.py
-      - ../src/bias
+      - ../src/bias/load_data.py
+      - ../src/bias/slicing.py
+      - ../src/bias/slice_report.py
+      - ../src/bias/model_slices.py
+      - ../src/bias/mitigate.py
+      - ../src/bias/run_bias_detection.py
+      - ../src/bias/run_bias_mitigation.py
       - ../configs/bias_config.yaml
     params:
       - bias

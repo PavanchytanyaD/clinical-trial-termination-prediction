@@ -162,8 +162,8 @@ def generate_tables(n_trials=500, seed=42):
             outcomes_assessor_masked=_flag(rng, 0.3))
         n_fac = int(rng.integers(1, 6 if stopped else 40))
         add("calculated_values", nct_id=nct, number_of_facilities=n_fac,
-            has_us_facility=_flag(rng, 0.45), has_single_facility=
-            "t" if n_fac == 1 else "f",
+            has_us_facility=_flag(rng, 0.45),
+            has_single_facility="t" if n_fac == 1 else "f",
             minimum_age_num=min_age or "", minimum_age_unit="Years"
             if min_age else "", maximum_age_num=max_age,
             maximum_age_unit="Years",

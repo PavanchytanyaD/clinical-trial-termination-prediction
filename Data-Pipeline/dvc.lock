@@ -3,19 +3,26 @@ stages:
   acquire:
     cmd: python -m scripts.acquire
     deps:
-    - path: ../src/ingestion
+    - path: ../src/error_handling.py
       hash: md5
-      md5: 93f23d94b692219e0a3550e3ceba9cba.dir
-      size: 23342
-      nfiles: 3
+      md5: 578c12c284ebe8cfdaff26abb55e1f30
+      size: 3426
+    - path: ../src/ingestion/fetch_aact.py
+      hash: md5
+      md5: 74b91d866f76be90ae9e3b2f66c0288e
+      size: 8366
+    - path: ../src/logging_utils.py
+      hash: md5
+      md5: 747e4807060236bfb619a939ae794c10
+      size: 858
     - path: scripts/acquire.py
       hash: md5
       md5: e3b2c50fa8b6a28c169950e53095c39e
       size: 3828
     - path: scripts/sample_snapshot.py
       hash: md5
-      md5: 8df01716ad102873d82d091316297f34
-      size: 10920
+      md5: 9fcc932079e82e69c9d0932f6d185dc0
+      size: 10919
     params:
       params.yaml:
         acquire:
@@ -27,20 +34,27 @@ stages:
     outs:
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
       size: 678731
       nfiles: 13
   preprocess:
     cmd: python -m scripts.preprocess
     deps:
-    - path: ../src/features
+    - path: ../src/features/build_text_sample.py
       hash: md5
-      md5: 44721ac628621851c1d940a2d710a410.dir
-      size: 85494
-      nfiles: 9
+      md5: ab02064eb384828466fc4e2da1cf64a4
+      size: 8241
+    - path: ../src/features/structured_features.py
+      hash: md5
+      md5: 5f68d72469e1bcdaab32491df0e97981
+      size: 16904
+    - path: ../src/features/text_cleaning.py
+      hash: md5
+      md5: c02b16e4f490fb0130d9952c38b98f24
+      size: 3655
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
       size: 678731
       nfiles: 13
     - path: scripts/preprocess.py
@@ -145,14 +159,37 @@ stages:
       hash: md5
       md5: cefae6b2b73c44702b694c9e82ee4540
       size: 2740
-    - path: ../src/bias
+    - path: ../src/bias/load_data.py
       hash: md5
-      md5: 87ec97d589f7a761bd06ea3fb0e46b85.dir
-      size: 98294
-      nfiles: 17
+      md5: 67cfa3bfe6722af1d8baabd067305b30
+      size: 7070
+    - path: ../src/bias/mitigate.py
+      hash: md5
+      md5: 28d53e1ed6d8fdfbc55ae9c7569c2eee
+      size: 8815
+    - path: ../src/bias/model_slices.py
+      hash: md5
+      md5: a46f68b10e55bcab56ef28e7b1999b0b
+      size: 2767
+    - path: ../src/bias/run_bias_detection.py
+      hash: md5
+      md5: e9dfcd3f7a91d785a3db2537858a6135
+      size: 4023
+    - path: ../src/bias/run_bias_mitigation.py
+      hash: md5
+      md5: 43722ddd4f951369e71ab9a0a59dc1b3
+      size: 6950
+    - path: ../src/bias/slice_report.py
+      hash: md5
+      md5: 5ae8e75b71f8420399dbef840b8b21f6
+      size: 2663
+    - path: ../src/bias/slicing.py
+      hash: md5
+      md5: fc6829c2b1c567e6a8caab948fcd1b31
+      size: 3993
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
       size: 678731
       nfiles: 13
     - path: scripts/bias.py
