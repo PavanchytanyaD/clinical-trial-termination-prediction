@@ -1,0 +1,96 @@
+# Local and GCP-VM Airflow for the data pipeline (LocalExecutor on Postgres).
+#
+#   cd Data-Pipeline/airflow
+#   cp .env.example .env        # set AIRFLOW_ADMIN_PASSWORD (and, on a laptop,
+#                               # GCLOUD_CONFIG_DIR for the DVC remote)
+#   docker compose up -d --build
+#   open http://localhost:8080  # user "admin"
+#
+# The whole repository is mounted at /opt/ctt, so tasks run the checked-out
+# code and DVC writes data, dvc.lock and the cache in the repository, then
+# pushes to the GCS remote, exactly as on a laptop. Runs on the same machine
+# never overlap (max_active_runs=1 in the DAG).
+
+x-airflow: &airflow
+  build:
+    context: ../..
+    dockerfile: Data-Pipeline/airflow/Dockerfile
+  image: ctt-data-pipeline-airflow:2.10.5
+  user: "${AIRFLOW_UID:-50000}:0"
+  env_file:
+    - path: ../.env           # pipeline secrets: AACT_*, SMTP_*, ALERT_*
+      required: false
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:-airflow}@postgres/airflow
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/ctt/Data-Pipeline/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    CTT_ALERT_EMAILS: ${CTT_ALERT_EMAILS:-}
+    CTT_SOURCE: ${CTT_SOURCE:-sample}
+    CTT_ZIP: ${CTT_ZIP:-}
+  volumes:
+    - ../..:/opt/ctt
+    # Laptop only: the gcloud folder whose credentials the DVC remote uses
+    # (.dvc/config.local credentialpath), mounted at the same path. On the
+    # GCP VM leave GCLOUD_CONFIG_DIR unset: the VM's service account is used.
+    - ${GCLOUD_CONFIG_DIR:-./no-gcloud}:${GCLOUD_CONFIG_DIR:-/opt/no-gcloud}:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        airflow users create --role Admin --username admin \
+          --firstname Admin --lastname User --email admin@example.com \
+          --password "$${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in airflow/.env}" \
+          || true
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:-airflow}@postgres/airflow
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-}
+    restart: "no"
+
+  scheduler:
+    <<: *airflow
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  webserver:
+    <<: *airflow
+    command: webserver
+    # localhost only; on the VM reach it through an SSH tunnel
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow-db:
