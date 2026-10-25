@@ -12,13 +12,16 @@ MLOps course project (Northeastern University). The system predicts the probabil
 
 ## Data pipeline (assignment 2)
 
-The data pipeline runs every month: it fetches an AACT snapshot, builds the features, checks the data, reports bias, and saves a versioned copy of everything. Airflow orchestrates it and DVC versions it.
+The data pipeline runs every month: it fetches an AACT snapshot, builds the features and the BioBERT text embeddings, checks the data, reports bias, and saves a versioned copy of everything. Airflow orchestrates it and DVC versions it.
 
 ```
                +--> preprocess --+--> schema_stats --> validate --+
-    acquire ---+                 +--> anomalies -------------------+--> publish
-               +--> bias ------------------------------------------+
+               |                 +--> anomalies -------------------+
+    acquire ---+--> bias ------------------------------------------+--> publish
+               +--> text --> embeddings (Vertex AI GPU) -----------+
 ```
+
+It runs locally (`dvc repro`, or Airflow in Docker) and on Google Cloud (the same Airflow on a Compute Engine VM, or Cloud Composer), with the data versions in a GCS bucket and the embeddings computed on a Vertex AI T4 GPU. See [Data-Pipeline/README.md](Data-Pipeline/README.md#where-it-runs).
 
 | Guideline item | Where | Owner |
 |---|---|---|
@@ -31,6 +34,8 @@ The data pipeline runs every month: it fetches an AACT snapshot, builds the feat
 | 7. Schema and statistics | `Data-Pipeline/scripts/schema_stats.py`, `validate.py` | Sivapriya (with Pavanchytanya) |
 | 8. Anomaly detection and alerts | `Data-Pipeline/scripts/anomalies.py` | Pavanchytanya |
 | 9. Pipeline flow optimization | `Data-Pipeline/docs/pipeline_optimization.md` | Pavanchytanya |
+| Text and BioBERT embeddings stages | `src/features/build_text_sample.py`, `biobert_embeddings.py` (Nithish); `Data-Pipeline/scripts/text.py`, `embeddings.py`, Vertex AI job (Pavanchytanya) | Nithish, Pavanchytanya |
+| Cloud hosting | `Data-Pipeline/airflow/`, `gce/`, `composer/`, `docker/` | Pavanchytanya |
 | Bias detection and slicing | `src/bias/slicing.py`, `slice_report.py`, `model_slices.py` | Danush, Atharva |
 | Bias mitigation and report | `src/bias/mitigate.py`, `docs/bias_report.md` | Atharva, Danush |
 | Error handling, code style, contributing | `src/error_handling.py`, `.flake8`, `CONTRIBUTING.md` | Sathyasai |
@@ -166,7 +171,7 @@ Output: `data/processed/structured_features.csv`, with `nct_id`, `overall_status
 python -m src.features.biobert_test_run --sample data/processed/text_sample_10k.jsonl
 ```
 
-On an RTX 4060 laptop GPU the 10k sample takes about 2.7 minutes, so all finished trials take about 2 hours, and the full embedding is run locally on a GPU. On Windows, `requirements.txt` installs the CPU build of PyTorch; install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) to use a GPU.
+On an RTX 4060 laptop GPU the 10k sample takes about 2.7 minutes, so all finished trials take about 2 hours. In the pipeline, the `embeddings` stage runs the same code on every trial as a Vertex AI job on a T4 GPU (`Data-Pipeline/scripts/embeddings.py`), or locally with `embeddings.backend: local`. On Windows, `requirements.txt` installs the CPU build of PyTorch; install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) to use a GPU.
 
 
 ### 5. Bias detection and mitigation
