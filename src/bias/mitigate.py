@@ -157,7 +157,10 @@ def compute_weights(
 
 
 def effective_sample_size(weights) -> float:
-    """Kish effective sample size. Lower than n when weights are uneven (the cost of reweighting)."""
+    """Kish effective sample size.
+
+    Lower than n when weights are uneven (the cost of reweighting).
+    """
     w = np.asarray(weights, dtype=float)
     return float(w.sum() ** 2 / (w**2).sum())
 
@@ -180,7 +183,8 @@ def _group_table(df: pd.DataFrame, col: str, label_col: str, sep: str, weights) 
         }
     ).explode("group")
     ex["wy"] = ex["w"] * ex["y"]
-    table = ex.groupby("group").agg(n_trials=("w", "size"), w_sum=("w", "sum"), wy_sum=("wy", "sum"))
+    table = ex.groupby("group").agg(n_trials=("w", "size"), w_sum=("w", "sum"),
+                                    wy_sum=("wy", "sum"))
     table["share"] = table["w_sum"] / w.sum()
     table["stopped_rate"] = table["wy_sum"] / table["w_sum"]
     return table[["n_trials", "share", "stopped_rate"]]
@@ -204,7 +208,9 @@ def before_after(
     for col in slices:
         b = _group_table(before, col, label_col, sep, None)
         a = _group_table(after, col, label_col, sep, after_weights)
-        t = b.join(a[["share", "stopped_rate"]], how="outer", lsuffix="_before", rsuffix="_after")
+        t = b.merge(a[["share", "stopped_rate"]], left_index=True,
+                    right_index=True, how="outer",
+                    suffixes=("_before", "_after"))
         t = t.reset_index()
         t.insert(0, "slice", col)
         parts.append(t)

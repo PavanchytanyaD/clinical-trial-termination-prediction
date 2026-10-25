@@ -82,7 +82,8 @@ def read_file(path, columns):
     if path.suffix == ".parquet":
         df = pd.read_parquet(path)
     else:
-        df = pd.read_csv(path)
+        # keep AACT's literal "NA" (phase not applicable) as a value
+        df = pd.read_csv(path, keep_default_na=False, na_values=[""])
     # Config maps our name -> file name; rename needs file name -> our name.
     return df.rename(columns={theirs: ours for ours, theirs in columns.items()})
 

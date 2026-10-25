@@ -69,7 +69,7 @@ mitigation:
   input_path: data/processed/trial_slices.csv
   output_dir: reports/bias/mitigation
   id_column: nct_id
-  label_column: label          # TODO: confirm from trial_slices.csv
+  label_column: label
   multi_value_sep: "|"
   slices:
     - phase

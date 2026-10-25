@@ -35,8 +35,8 @@ logger = logging.getLogger("bias_mitigation")
 
 # Used when a setting is missing from the config's "mitigation" section.
 DEFAULTS = {
-    "input_path": "data/bias/data_slices.csv",
-    "output_dir": "data/bias/mitigation",
+    "input_path": "data/processed/trial_slices.csv",
+    "output_dir": "reports/bias/mitigation",
     "id_column": "nct_id",
     "label_column": "label",
     "multi_value_sep": "|",
@@ -75,7 +75,8 @@ def read_slices(path: str | Path, id_col: str) -> pd.DataFrame:
     if path.suffix == ".parquet":
         df = pd.read_parquet(path)
     elif path.suffix == ".csv":
-        df = pd.read_csv(path)
+        # keep AACT's literal "NA" (phase not applicable) as a value
+        df = pd.read_csv(path, keep_default_na=False, na_values=[""])
     else:
         raise ValueError(f"unsupported file type: {path.suffix} (use .csv or .parquet)")
     if id_col not in df.columns:
@@ -149,7 +150,8 @@ def run(config: dict) -> dict:
     ]
     for row in still_small.itertuples():
         logger.warning(
-            "still too small after mitigation: %s=%s (share %.4f)", row.slice, row.group, row.share_after
+            "still too small after mitigation: %s=%s (share %.4f)",
+            row.slice, row.group, row.share_after
         )
 
     summary = {

@@ -31,3 +31,4 @@ LEFT JOIN (
     WHERE downcase_mesh_term = ANY(%(areas)s)
     GROUP BY nct_id
 ) a ON a.nct_id = s.nct_id
+ORDER BY s.nct_id

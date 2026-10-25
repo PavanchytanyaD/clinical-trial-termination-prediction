@@ -1,7 +1,8 @@
 import pandas as pd
 import pytest
 
-from src.bias.load_data import REQUIRED_COLUMNS, load_trials, query_aact
+from src.bias.load_data import (REQUIRED_COLUMNS, load_trials, query_aact,
+                                read_file)
 
 
 def test_file_source_renames_columns(tmp_path):
@@ -53,3 +54,12 @@ def test_aact_needs_credentials(monkeypatch):
     monkeypatch.delenv("AACT_PASSWORD", raising=False)
     with pytest.raises(RuntimeError, match="AACT_USER"):
         query_aact()
+
+
+def test_read_file_keeps_phase_na(tmp_path):
+    # AACT uses the literal phase "NA" (not applicable); it is not missing
+    path = tmp_path / "trials.csv"
+    path.write_text("nct_id,phase\nNCT00000001,NA\nNCT00000002,\n")
+    df = read_file(path, {"nct_id": "nct_id", "phase": "phase"})
+    assert df.phase.iloc[0] == "NA"
+    assert pd.isna(df.phase.iloc[1])
