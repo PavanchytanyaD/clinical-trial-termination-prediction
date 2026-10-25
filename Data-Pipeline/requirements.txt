@@ -1,0 +1,14 @@
+# Pipeline steps (run by DVC locally and in the Composer pods).
+# Python 3.11 or later, same as the repository's requirements.txt.
+numpy==2.3.3
+pandas==3.0.1
+pyyaml==6.0.3
+requests==2.32.5
+great_expectations==1.24.1
+dvc[gs]==3.63.0
+# dvc 3.63 breaks with pathspec 1.x (removed _DIR_MARK)
+pathspec==0.12.1
+google-cloud-storage==3.17.1
+# AACT database source for acquire.source: db (src/ingestion/fetch_aact.py)
+psycopg2-binary==2.9.13
+pytest==9.0.2

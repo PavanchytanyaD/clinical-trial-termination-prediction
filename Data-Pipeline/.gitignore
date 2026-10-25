@@ -1,0 +1,7 @@
+.env
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# DVC adds the stage outputs to .gitignore files next to them
+.ruff_cache/

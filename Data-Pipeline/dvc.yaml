@@ -1,0 +1,55 @@
+# Data pipeline stages. `dvc repro` runs the whole pipeline (no Airflow
+# needed) and skips stages whose code, inputs and params did not change.
+# The Airflow DAG (dags/ctt_data_pipeline.py) runs the same stages one task
+# each, through scripts/run_stage.py. dvc.lock records the md5 of every
+# output; `dvc push` stores the data itself in the GCS remote.
+stages:
+  acquire:
+    cmd: python -m scripts.acquire
+    deps:
+      - scripts/acquire.py
+      - scripts/sample_snapshot.py
+    params:
+      - acquire
+    outs:
+      - data/raw/aact_snapshot
+
+  preprocess:
+    cmd: python -m scripts.preprocess
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/preprocess.py
+    params:
+      - preprocess
+    outs:
+      - data/processed/structured_features.csv
+      - data/processed/structured_features.meta.json
+
+  schema_stats:
+    cmd: python -m scripts.schema_stats
+    deps:
+      - data/processed/structured_features.csv
+      - scripts/schema_stats.py
+    params:
+      - schema
+    outs:
+      - schema/generated/expectation_suite.json
+      - reports/statistics/statistics.json
+      - reports/statistics/statistics.md
+
+  validate:
+    cmd: python -m scripts.validate
+    deps:
+      - data/processed/structured_features.csv
+      - reports/statistics/statistics.json
+      - schema/generated/expectation_suite.json
+      - schema/baseline
+      - scripts/validate.py
+    params:
+      - validate
+    outs:
+      - reports/validation/validation.json
+      - reports/validation/validation.md
+    metrics:
+      - reports/validation/summary.json:
+          cache: false
