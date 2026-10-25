@@ -129,7 +129,8 @@ def generate_tables(n_trials=500, seed=42):
                     + "~~Exclusion Criteria:~~"
                     + "~".join(f"* exclusion item {k}" for k in range(n_excl)))
         min_age = int(rng.choice([0, 12, 18, 18, 18, 40, 65]))
-        max_age = int(rng.choice([17, 45, 65, 75, 99]))
+        max_age = int(rng.choice([a for a in (17, 45, 65, 75, 99)
+                                  if a > min_age]))
         add("eligibilities", nct_id=nct,
             gender=rng.choice(["ALL", "ALL", "ALL", "FEMALE", "MALE"]),
             minimum_age=f"{min_age} Years" if min_age else "",

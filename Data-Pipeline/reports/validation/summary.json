@@ -1,9 +1,9 @@
 {
-  "validated_at": "2026-10-24T14:39:59+00:00",
+  "validated_at": "2026-10-25T12:41:41+00:00",
   "snapshot": "20261001",
   "suite": "current snapshot (no baseline frozen yet)",
-  "checks": 67,
-  "passed": 67,
+  "checks": 475,
+  "passed": 475,
   "failed_critical": 0,
   "failed_warning": 0,
   "success": true,

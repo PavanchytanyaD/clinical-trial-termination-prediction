@@ -16,6 +16,19 @@ preprocess:
   # auto: src/features/structured_features.py if present, else placeholder
   mode: auto
 
+bias:
+  # settings live in configs/bias_config.yaml (Tasks 4 and 5); this only
+  # picks the mitigation: reweight or resample
+  mitigation_method: reweight
+
+anomalies:
+  fail_on: critical           # stop the pipeline on: critical | warning | never
+  alert_on: warning           # email on: critical | warning | never
+  max_missing_rate: 0.3       # warn when a column is missing for > 30% of trials
+  max_outlier_share: 0.05     # warn when > 5% of a column's values are outliers
+  iqr_k: 3.0                  # outlier = outside [Q1 - k IQR, Q3 + k IQR]
+  max_invalid_date_share: 0.01
+
 schema:
   min_rows: 100               # fewer rows than this is a critical failure
   range_slack: 0.5            # numeric max can grow 50% before a warning

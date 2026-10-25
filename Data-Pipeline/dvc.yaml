@@ -3,12 +3,20 @@
 # The Airflow DAG (dags/ctt_data_pipeline.py) runs the same stages one task
 # each, through scripts/run_stage.py. dvc.lock records the md5 of every
 # output; `dvc push` stores the data itself in the GCS remote.
+#
+# Paths starting with ../ are the team's shared code in src/ and configs/ at
+# the repository root: changing that code re-runs the stages that use it.
+#
+#   acquire --+--> preprocess --+--> schema_stats --> validate
+#             |                 +--> anomalies
+#             +--> bias
 stages:
   acquire:
     cmd: python -m scripts.acquire
     deps:
       - scripts/acquire.py
       - scripts/sample_snapshot.py
+      - ../src/ingestion
     params:
       - acquire
     outs:
@@ -19,11 +27,25 @@ stages:
     deps:
       - data/raw/aact_snapshot
       - scripts/preprocess.py
+      - ../src/features
     params:
       - preprocess
     outs:
       - data/processed/structured_features.csv
       - data/processed/structured_features.meta.json
+
+  bias:
+    cmd: python -m scripts.bias
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/bias.py
+      - ../src/bias
+      - ../configs/bias_config.yaml
+    params:
+      - bias
+    outs:
+      - data/processed/trial_slices.csv
+      - reports/bias
 
   schema_stats:
     cmd: python -m scripts.schema_stats
@@ -36,6 +58,20 @@ stages:
       - schema/generated/expectation_suite.json
       - reports/statistics/statistics.json
       - reports/statistics/statistics.md
+
+  anomalies:
+    cmd: python -m scripts.anomalies
+    deps:
+      - data/processed/structured_features.csv
+      - scripts/anomalies.py
+    params:
+      - anomalies
+    outs:
+      - reports/anomalies/anomalies.json
+      - reports/anomalies/anomalies.md
+    metrics:
+      - reports/anomalies/summary.json:
+          cache: false
 
   validate:
     cmd: python -m scripts.validate
