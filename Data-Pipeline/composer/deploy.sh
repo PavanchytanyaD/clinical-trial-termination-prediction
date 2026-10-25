@@ -8,6 +8,8 @@
 # Steps (run in this order the first time):
 #   bucket     create the data bucket (DVC remote + run state), if missing
 #   image      build the pipeline image with Cloud Build, push to Artifact Registry
+#   gpu-image  build the BioBERT GPU image the embeddings stage runs on
+#              Vertex AI (needed by the Docker/VM Airflow as well)
 #   env        create the Composer 3 environment (BILLED while it exists)
 #   config     set the DAG's environment variables on the environment
 #   secret     create the SMTP/AACT Kubernetes secret from Data-Pipeline/.env
@@ -21,14 +23,42 @@ REGION="${REGION:-us-central1}"
 ENV_NAME="${ENV_NAME:-ctt-composer}"
 REPO="${REPO:-ctt-images}"                # Artifact Registry repository
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/data-pipeline:latest"
+GPU_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/biobert-gpu:latest"
 BUCKET="${BUCKET:-ctt-mlops-project-data}"  # DVC data and run state
 STATE_URI="gs://${BUCKET}/data-pipeline/state"
 ALERT_EMAILS="${ALERT_EMAILS:-}"
 SECRET_NAME="ctt-pipeline-secrets"
+BUILD_SA="${BUILD_SA:-cicd-sa@${PROJECT}.iam.gserviceaccount.com}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # Data-Pipeline/
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 
 gc() { gcloud --project "${PROJECT}" "$@"; }
+
+# Build Data-Pipeline/docker/<dockerfile> with Cloud Build (repository root as
+# context: src/ + Data-Pipeline/) and push it to Artifact Registry.
+cloud_build() {
+  gc artifacts repositories describe "${REPO}" --location "${REGION}" \
+      >/dev/null 2>&1 \
+    || gc artifacts repositories create "${REPO}" --location "${REGION}" \
+         --repository-format docker
+  local config
+  config="$(mktemp)"
+  cat > "${config}" <<EOF
+steps:
+  - name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    args: ["build", "-f", "Data-Pipeline/docker/$1", "-t", "$2", "."]
+images: ["$2"]
+timeout: 3600s
+# builds run as cicd-sa (Artifact Registry writer), not the Compute default
+serviceAccount: projects/${PROJECT}/serviceAccounts/${BUILD_SA}
+options:
+  machineType: ${3:-UNSPECIFIED}
+  logging: CLOUD_LOGGING_ONLY
+EOF
+  gc builds submit "${REPO_ROOT}" --config "${config}"
+  rm -f "${config}"
+}
 
 case "${1:-}" in
   bucket)
@@ -38,19 +68,11 @@ case "${1:-}" in
     echo "DVC remote: cd Data-Pipeline && dvc remote modify gcs url gs://${BUCKET}/dvc-store"
     ;;
   image)
-    gc artifacts repositories describe "${REPO}" --location "${REGION}" \
-        >/dev/null 2>&1 \
-      || gc artifacts repositories create "${REPO}" --location "${REGION}" \
-           --repository-format docker
-    # Cloud Build uses the repository root as context (src/ + Data-Pipeline/)
-    cat > /tmp/ctt-cloudbuild.yaml <<EOF
-steps:
-  - name: gcr.io/cloud-builders/docker
-    env: ["DOCKER_BUILDKIT=1"]
-    args: ["build", "-f", "Data-Pipeline/docker/Dockerfile", "-t", "${IMAGE}", "."]
-images: ["${IMAGE}"]
-EOF
-    gc builds submit "${REPO_ROOT}" --config /tmp/ctt-cloudbuild.yaml
+    cloud_build Dockerfile "${IMAGE}"
+    ;;
+  gpu-image)
+    # torch + CUDA + the BioBERT weights: a larger build machine is faster
+    cloud_build Dockerfile.gpu "${GPU_IMAGE}" E2_HIGHCPU_8
     ;;
   env)
     # Smallest Composer 3 environment; it is billed every hour it exists.

@@ -1,0 +1,17 @@
+# Files Cloud Build does not upload (./Data-Pipeline/composer/deploy.sh image,
+# gpu-image). gcloud reads only the root .gitignore, so the folders that
+# nested .gitignore files exclude are listed here too.
+.gcloudignore
+.git
+#!include:.gitignore
+**/.dvc/cache/
+**/.dvc/tmp/
+**/.dvc/config.local
+Data-Pipeline/data/
+Data-Pipeline/reports/
+Data-Pipeline/logs/
+Data-Pipeline/schema/generated/
+**/.env
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
