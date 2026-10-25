@@ -8,13 +8,14 @@ ties every part of the data pipeline assignment together:
 | 1. Data acquisition | `scripts/acquire.py` calls `../src/ingestion/fetch_aact.py` |
 | 2. Data preprocessing | `scripts/preprocess.py` calls `../src/features/structured_features.py` |
 | 3. Test modules | `tests/` here and `../tests/` |
-| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`, runs on Cloud Composer |
+| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`; Airflow in Docker (`airflow/`) on a laptop or a GCP VM (`gce/`), or on Cloud Composer (`composer/`) |
 | 5. Data versioning with DVC | `dvc.yaml`, `dvc.lock`, `.dvc/config` (GCS remote) |
 | 6. Tracking and logging | `scripts/tracking.py`, `scripts/alerts.py` |
 | 7. Data schema and statistics generation | `scripts/schema_stats.py`, `scripts/validate.py`, `schema/` |
 | 8. Anomaly detection and alerts | `scripts/anomalies.py` |
 | 9. Pipeline flow optimization | `docs/pipeline_optimization.md` |
 | Bias detection and mitigation | `scripts/bias.py` calls `../src/bias/` |
+| BioBERT text embeddings | `scripts/text.py`, `scripts/embeddings.py` call `../src/features/`; GPU job on Vertex AI |
 
 The stages call the team's shared code in `../src/` (ingestion, features,
 bias, error handling). Without an AACT account, `acquire` writes a seeded
@@ -24,11 +25,12 @@ end anywhere.
 ## How it fits together
 
 ```
-           Cloud Composer (Airflow)  -- schedule, order, retries, failure email
-                       |
+     Airflow (Docker on a laptop or GCP VM, or Cloud Composer)
+                       |  schedule, order, retries, failure email
                +--> preprocess --+--> schema_stats --> validate --+
-    acquire ---+                 +--> anomalies -------------------+--> publish
-               +--> bias ------------------------------------------+
+               |                 +--> anomalies -------------------+
+    acquire ---+--> bias ------------------------------------------+--> publish
+               +--> text --> embeddings (Vertex AI T4 GPU job) ----+
                        |
              each task = one DVC stage (scripts/run_stage.py)
                        |
@@ -44,6 +46,8 @@ end anywhere.
 | `schema_stats` | Per-column statistics, and a Great Expectations suite (the schema) inferred from the snapshot | `reports/statistics/`, `schema/generated/` |
 | `anomalies` | Flags duplicate or malformed ids, invalid labels, impossible values (critical) and missing-value spikes, outliers, bad dates (warnings); emails an alert, stops the run on critical findings | `reports/anomalies/` |
 | `validate` | Checks the snapshot against the frozen baseline schema and statistics; stops the run on critical problems and emails an alert | `reports/validation/` |
+| `text` | Cleaned registration-time text of every trial (title, summary, description, inclusion, exclusion, outcomes) via `src/features/build_text_sample.py` | `data/processed/text_all.jsonl` |
+| `embeddings` | BioBERT embeddings per text field (`src/features/biobert_embeddings.py`), on a Vertex AI GPU by default; see below | `data/processed/embeddings/` |
 | `publish` | Pushes every output to the DVC remote and writes a data-version record | `logs/versions/`, GCS `state/versions/` |
 
 ## Folder structure
@@ -56,6 +60,8 @@ Data-Pipeline/
 |  |- sample_snapshot.py       placeholder AACT snapshot generator
 |  |- preprocess.py            stage 2 adapter (feature code or placeholder)
 |  |- bias.py                  bias detection and mitigation on the snapshot
+|  |- text.py                  cleaned trial text (BioBERT input)
+|  |- embeddings.py            BioBERT embeddings (Vertex AI GPU or local)
 |  |- schema_stats.py          statistics + Great Expectations schema
 |  |- anomalies.py             anomaly detection + alerts
 |  |- validate.py              schema validation + drift checks + alerts
@@ -67,6 +73,9 @@ Data-Pipeline/
 |- tests/                      unit tests (pytest)
 |- docs/                       pipeline optimization note and Gantt charts
 |- docker/Dockerfile           image the Composer tasks run
+|- docker/Dockerfile.gpu       BioBERT image the Vertex AI GPU job runs
+|- airflow/                    Airflow in Docker Compose (laptop and GCP VM)
+|- gce/vm.sh                   the same Airflow on a Compute Engine VM
 |- composer/                   Cloud Composer deployment (deploy.sh, README)
 |- dvc.yaml, params.yaml       DVC stages and their parameters
 |- dvc.lock                    hash of every output: the current data version
@@ -105,13 +114,81 @@ To use real AACT data instead of the placeholder snapshot, set
 or to `db` (with `AACT_USER` and `AACT_PASSWORD` in the environment). Both
 need `src/ingestion/fetch_aact.py` in the checkout.
 
+## Where it runs
+
+The same DAG and the same DVC stages run in three places; all of them push
+data versions to the same GCS remote (`gs://ctt-mlops-project-data`).
+
+| | How | Cost |
+|---|---|---|
+| Laptop, no Airflow | `dvc repro` (above) | free |
+| Laptop, Airflow in Docker | `airflow/docker-compose.yaml` | free |
+| GCP VM, Airflow in Docker | `gce/vm.sh` (same compose stack on Compute Engine) | e2-standard-4 while running |
+| Cloud Composer 3 | `composer/deploy.sh` | billed per hour while the environment exists |
+
+The `embeddings` stage starts a Vertex AI GPU job from any of them.
+
+**Airflow in Docker on a laptop** (needs Docker Desktop):
+
+```bash
+cd Data-Pipeline/airflow
+cp .env.example .env    # set AIRFLOW_ADMIN_PASSWORD; GCLOUD_CONFIG_DIR for GCS/Vertex
+docker compose up -d --build
+open http://localhost:8080   # user admin
+```
+
+The repository is mounted into the containers, so tasks run the checked-out
+code and write `dvc.lock` and the data here. `GCLOUD_CONFIG_DIR` is the
+gcloud folder whose application-default credentials reach the bucket and
+Vertex AI (`gcloud auth application-default login`).
+
+**The same stack on a GCP VM** (runs as `pipeline-sa`, no keys):
+
+```bash
+export CLOUDSDK_CONFIG=~/.config/gcloud-ctt   # the ctt-mlops gcloud login
+./gce/vm.sh create     # once; Airflow is up after about 10 minutes
+./gce/vm.sh secrets    # copies Data-Pipeline/.env (AACT_*, SMTP_*) to the VM
+./gce/vm.sh ui         # Airflow at http://localhost:8081; ./gce/vm.sh password
+./gce/vm.sh trigger    # or SOURCE=db SNAPSHOT=20261101 ./gce/vm.sh trigger
+./gce/vm.sh update     # pull the latest code on the VM
+./gce/vm.sh stop       # stop paying for the VM when idle
+```
+
+**Cloud Composer**: see [composer/README.md](composer/README.md).
+
+## BioBERT embeddings (Vertex AI)
+
+`text` writes the cleaned text of every trial; `embeddings` turns each text
+field into a 768-dim BioBERT vector (`dmis-lab/biobert-base-cased-v1.2`,
+used as is; long texts are split into overlapping 512-token windows and
+averaged). Output in `data/processed/embeddings/`: `ids.txt` (row order),
+one `<field>.npy` float16 array per field and `meta.json`. DVC versions it
+like every other output and skips the stage when the text did not change.
+
+`params.yaml` `embeddings.backend` picks where it runs:
+
+- `vertex` (default): `scripts/embeddings.py` uploads the text to the
+  bucket, starts a Vertex AI custom job on an `n1-standard-8` with one T4
+  GPU running the image `biobert-gpu` (`docker/Dockerfile.gpu`, model
+  weights included), waits for it, and downloads the result. If the task is
+  stopped or times out, the job is cancelled. Build the image once with
+  `./composer/deploy.sh gpu-image`.
+- `local`: runs on this machine (GPU if there is one, else CPU); needs
+  `torch` and `transformers` from the root `requirements.txt`. Set
+  `max_trials` to embed only the first N trials for a quick test.
+
+```bash
+dvc repro embeddings    # with backend vertex: a GPU job on Vertex AI
+# quick local test: set backend: local and max_trials: 50, then the same
+```
+
 ## 4. Pipeline orchestration (Airflow)
 
 `dags/ctt_data_pipeline.py` defines the DAG `ctt_data_pipeline`:
 
-- `acquire` first, then `preprocess` and `bias` in parallel, then
-  `schema_stats` and `anomalies` in parallel, then `validate`, then
-  `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
+- `acquire` first, then `preprocess`, `bias` and `text` in parallel, then
+  `schema_stats`, `anomalies` and `embeddings` in parallel, then
+  `validate`, then `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
   triggered by hand with a config such as
   `{"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}`.
 - Every task runs one DVC stage with `python -m scripts.run_stage <stage>`.

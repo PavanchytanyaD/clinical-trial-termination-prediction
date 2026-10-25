@@ -28,6 +28,7 @@ export BUCKET=<bucket> ALERT_EMAILS=<a@x.com,b@y.com>
 ./composer/deploy.sh bucket    # create the bucket if needed
 dvc remote modify gcs url gs://$BUCKET/dvc-store   # then commit .dvc/config
 ./composer/deploy.sh image     # Cloud Build -> Artifact Registry
+./composer/deploy.sh gpu-image # BioBERT image for the Vertex AI embeddings job
 ./composer/deploy.sh env       # create the environment (about 25 minutes)
 ./composer/deploy.sh config    # CTT_* environment variables for the DAG
 ./composer/deploy.sh secret    # SMTP / AACT settings from .env as a secret
@@ -36,7 +37,10 @@ SNAPSHOT=20261001 SOURCE=sample ./composer/deploy.sh trigger
 ```
 
 Rebuild the image (`image`) after every code change: the pods run the code
-in the image, not the code in the repository.
+in the image, not the code in the repository. Builds run as `cicd-sa`
+(Artifact Registry writer, log writer), not the Compute default account.
+The `embeddings` task only submits and watches the Vertex AI GPU job, so it
+runs in the normal pipeline pod.
 
 ## DAG settings (environment variables)
 
