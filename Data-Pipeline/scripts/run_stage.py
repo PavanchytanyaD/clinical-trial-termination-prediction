@@ -111,6 +111,8 @@ def set_params(overrides, path=PARAMS_FILE):
         current = (yaml.safe_load("\n".join(lines)) or {}).get(section, {})
         if not isinstance(current, dict):
             raise ValueError(f"params.yaml section {section!r} is not a map")
+        if raw == "" and not isinstance(current.get(name), (str, type(None))):
+            continue  # an empty number or flag means: keep params.yaml's
         value = _yaml_value(raw, current.get(name))
         start = next((i for i, line in enumerate(lines)
                       if line.rstrip() == f"{section}:"), None)
@@ -360,6 +362,10 @@ def publish():
     for path in produced_by():
         dvc("pull", path, check=False)
     dvc("push")
+    # summary.json is a DVC metric outside the cache: take it from what the
+    # validate task uploaded for this run
+    download(f"{state.run}/validate/{VALIDATION_SUMMARY.relative_to(ROOT)}",
+             VALIDATION_SUMMARY)
     record = version_record()
     versions = LOG_DIR / "versions"
     versions.mkdir(parents=True, exist_ok=True)

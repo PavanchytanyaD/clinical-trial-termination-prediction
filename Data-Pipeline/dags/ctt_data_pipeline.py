@@ -42,6 +42,7 @@ Configuration (environment variables):
 
 Trigger with a config to pick the snapshot or source for one run:
     {"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}
+and, for the test source, its size: {"source": "sample", "sample_trials": 50000}
 """
 
 import json
@@ -84,6 +85,8 @@ SOURCE = ('{{ dag_run.conf.get("source") or '
           + json.dumps(os.environ.get("CTT_SOURCE", "sample")) + " }}")
 ZIP = ('{{ dag_run.conf.get("zip") or '
        + json.dumps(os.environ.get("CTT_ZIP", "")) + " }}")
+# empty = keep params.yaml's value
+SAMPLE_TRIALS = '{{ dag_run.conf.get("sample_trials") or "" }}'
 
 
 def log_failure(context):
@@ -177,7 +180,8 @@ with DAG(
 ) as dag:
     acquire = step("acquire", {"acquire.snapshot": SNAPSHOT,
                                "acquire.source": SOURCE,
-                               "acquire.zip": ZIP})
+                               "acquire.zip": ZIP,
+                               "acquire.sample_trials": SAMPLE_TRIALS})
     preprocess = step("preprocess")
     bias = step("bias")
     text = step("text")

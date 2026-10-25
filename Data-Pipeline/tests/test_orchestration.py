@@ -27,6 +27,14 @@ def test_param_override_keeps_comments_and_types(tmp_path):
     assert params["validate"] == {"fail_on": "critical", "alert_on": "never"}
 
 
+def test_empty_number_override_keeps_params_value(tmp_path):
+    p = tmp_path / "params.yaml"
+    p.write_text("acquire:\n  sample_trials: 500\n  zip: \"x\"\n")
+    run_stage.set_params(["acquire.sample_trials=", "acquire.zip="], p)
+    assert yaml.safe_load(p.read_text())["acquire"] == {"sample_trials": 500,
+                                                        "zip": ""}
+
+
 @pytest.mark.parametrize("bad", ["snapshot=1", "acquire=1", "a.b.c=1", "x"])
 def test_bad_overrides_are_rejected(bad, tmp_path):
     p = tmp_path / "params.yaml"
@@ -224,7 +232,7 @@ def test_dag_structure(runner, operator, monkeypatch):
 def test_k8s_tasks_pass_params_as_separate_args(monkeypatch):
     dag = load_dag("k8s", monkeypatch)
     args = dag.get_task("acquire").arguments
-    assert args[0] == "acquire" and args.count("--param") == 3
+    assert args[0] == "acquire" and args.count("--param") == 4
     assert not any("'" in a for a in args)  # no shell quoting reaches the pod
     env = {e.name: e.value for e in dag.get_task("validate").env_vars}
     assert env["PIPELINE_RUN_ID"] == "{{ run_id }}"
