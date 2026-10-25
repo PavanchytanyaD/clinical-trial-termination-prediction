@@ -1,12 +1,18 @@
 """Airflow DAG: monthly data pipeline for clinical-trial termination.
 
-    acquire -> preprocess -> schema_stats -> validate -> publish
+               +--> preprocess --+--> schema_stats --> validate --+
+    acquire ---+                 +--> anomalies -------------------+--> publish
+               +--> bias ------------------------------------------+
 
 Each task runs one DVC stage (scripts/run_stage.py), so DVC versions every
 output and skips stages whose inputs did not change; Airflow schedules the
 run, orders the steps, retries failed steps and emails on failure.
-`validate` exits non-zero on critical data problems, which fails the task and
-stops the run before `publish` records a bad data version.
+Independent branches run in parallel (bias needs only the raw snapshot;
+schema_stats and anomalies both need only the features), which shortens the
+run; see docs/pipeline_optimization.md.
+`validate` and `anomalies` exit non-zero on critical data problems, which
+fails the task and stops the run before `publish` records a bad data
+version.
 
 Configuration (environment variables of the Composer environment):
 
@@ -139,13 +145,14 @@ default_args = {
 
 with DAG(
     dag_id="ctt_data_pipeline",
-    description="AACT snapshot -> features -> schema/statistics -> "
-                "validation -> DVC data version",
+    description="AACT snapshot -> features, bias report -> statistics, "
+                "anomalies, validation -> DVC data version",
     # AACT publishes a monthly export; run on the 5th at 06:00 UTC
     schedule="0 6 5 * *",
     start_date=datetime(2026, 10, 1),
     catchup=False,
-    max_active_runs=1,  # stages share dvc.lock, so runs must not overlap
+    # runs must not overlap: a run's stages share dvc.lock and params.yaml
+    max_active_runs=1,
     dagrun_timeout=timedelta(hours=8),
     default_args=default_args,
     tags=["ctt", "data-pipeline", "dvc"],
@@ -155,9 +162,15 @@ with DAG(
                                "acquire.source": SOURCE,
                                "acquire.zip": ZIP})
     preprocess = step("preprocess")
+    bias = step("bias")
     schema_stats = step("schema_stats")
+    anomalies = step("anomalies", timeout=timedelta(minutes=45))
     validate = step("validate", timeout=timedelta(minutes=45))
-    # validate failing stops here, so no bad data version is recorded
+    # publish runs only if every check passed (default trigger rule
+    # all_success), so no bad data version is recorded
     publish = step("publish", timeout=timedelta(minutes=30))
 
-    acquire >> preprocess >> schema_stats >> validate >> publish
+    acquire >> [preprocess, bias]
+    preprocess >> [schema_stats, anomalies]
+    schema_stats >> validate
+    [validate, anomalies, bias] >> publish

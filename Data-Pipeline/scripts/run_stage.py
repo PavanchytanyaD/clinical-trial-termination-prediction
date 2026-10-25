@@ -26,9 +26,11 @@ import datetime as dt
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -185,6 +187,40 @@ def upload(path, uri):
     logger.info("uploaded %s", uri)
 
 
+def read_versioned(uri):
+    """(text, generation) of a GCS object; (None, 0) if it does not exist."""
+    from google.api_core.exceptions import NotFound
+    bucket, name = _split(uri)
+    blob = _gcs().bucket(bucket).blob(name)
+    try:
+        blob.reload()
+        return blob.download_as_text(if_generation_match=blob.generation), \
+            blob.generation
+    except NotFound:
+        return None, 0
+
+
+def write_if_generation(uri, text, generation):
+    """Write text only if the object is still at that generation (0 = must
+    not exist yet). Returns False when another writer got there first."""
+    from google.api_core.exceptions import PreconditionFailed
+    bucket, name = _split(uri)
+    try:
+        _gcs().bucket(bucket).blob(name).upload_from_string(
+            text, if_generation_match=generation)
+    except PreconditionFailed:
+        return False
+    return True
+
+
+def merge_lock_entry(shared_text, local_lock, stage):
+    """The shared dvc.lock with this stage's entry replaced by ours."""
+    shared = yaml.safe_load(shared_text or "") or {}
+    shared.setdefault("schema", local_lock.get("schema", "2.0"))
+    shared.setdefault("stages", {})[stage] = local_lock["stages"][stage]
+    return yaml.safe_dump(shared, sort_keys=False)
+
+
 def upload_tree(local_dir, uri):
     local_dir = Path(local_dir)
     for p in sorted(local_dir.rglob("*")):
@@ -207,10 +243,29 @@ class State:
     def push_params(self):
         upload(PARAMS_FILE, f"{self.run}/params.yaml")
 
-    def push_lock(self):
-        if LOCK_FILE.exists():
-            upload(LOCK_FILE, f"{self.uri}/dvc.lock")
-            upload(LOCK_FILE, f"{self.run}/dvc.lock")
+    def push_lock(self, stage, attempts=20):
+        """Merge this stage's entry into the shared dvc.lock.
+
+        Parallel tasks (for example bias and preprocess) finish at about the
+        same time, each in its own pod with its own copy of dvc.lock. A plain
+        upload would let the last one overwrite the other's entry, so the
+        write is conditional on the object's generation and retried.
+        """
+        local = yaml.safe_load(LOCK_FILE.read_text()) if LOCK_FILE.exists() \
+            else {}
+        if stage not in (local.get("stages") or {}):
+            return
+        uri = f"{self.uri}/dvc.lock"
+        for _ in range(attempts):
+            shared, generation = read_versioned(uri)
+            merged = merge_lock_entry(shared, local, stage)
+            if write_if_generation(uri, merged, generation):
+                LOCK_FILE.write_text(merged)
+                upload(LOCK_FILE, f"{self.run}/dvc.lock")
+                logger.info("merged stage %s into %s", stage, uri)
+                return
+            time.sleep(random.uniform(0.2, 1.0))  # another stage wrote it
+        raise RuntimeError(f"could not update {uri} after {attempts} tries")
 
     def push_artifacts(self, stage):
         for d in UPLOAD_DIRS:
@@ -248,7 +303,7 @@ def run_stage(stage, overrides=()):
                  stage, check=False)
         if rc == 0 and state:
             dvc("push", stage)
-            state.push_lock()
+            state.push_lock(stage)
     finally:
         if state:
             state.push_artifacts(stage)

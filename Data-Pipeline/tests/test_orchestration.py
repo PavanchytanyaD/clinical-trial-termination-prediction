@@ -36,8 +36,9 @@ def test_bad_overrides_are_rejected(bad, tmp_path):
 
 
 def test_stage_graph_matches_dvc_yaml():
-    assert list(run_stage.stages()) == ["acquire", "preprocess",
-                                        "schema_stats", "validate"]
+    assert list(run_stage.stages()) == ["acquire", "preprocess", "bias",
+                                        "schema_stats", "anomalies",
+                                        "validate"]
     produced = run_stage.produced_by()
     assert produced["data/raw/aact_snapshot"] == "acquire"
     assert produced["data/processed/structured_features.csv"] == "preprocess"
@@ -190,8 +191,16 @@ def load_dag(runner, monkeypatch):
                           ("k8s", "KubernetesPodOperator")])
 def test_dag_structure(runner, operator, monkeypatch):
     dag = load_dag(runner, monkeypatch)
-    order = ["acquire", "preprocess", "schema_stats", "validate", "publish"]
-    assert [t.task_id for t in dag.topological_sort()] == order
+    upstream = {t.task_id: sorted(t.upstream_task_ids) for t in dag.tasks}
+    assert upstream == {
+        "acquire": [],
+        "preprocess": ["acquire"],
+        "bias": ["acquire"],
+        "schema_stats": ["preprocess"],
+        "anomalies": ["preprocess"],
+        "validate": ["schema_stats"],
+        "publish": ["anomalies", "bias", "validate"],
+    }
     for t in dag.tasks:
         assert type(t).__name__ == operator
         assert t.retries == 2
@@ -206,3 +215,50 @@ def test_k8s_tasks_pass_params_as_separate_args(monkeypatch):
     env = {e.name: e.value for e in dag.get_task("validate").env_vars}
     assert env["PIPELINE_RUN_ID"] == "{{ run_id }}"
     assert env["PIPELINE_ORCHESTRATED"] == "1"
+
+
+# ---------------------------------------------------------------- dvc.lock
+def test_merge_lock_entry_keeps_other_stages():
+    shared = yaml.safe_dump({"schema": "2.0", "stages": {
+        "acquire": {"cmd": "a"}, "bias": {"cmd": "old"}}})
+    local = {"schema": "2.0", "stages": {"bias": {"cmd": "new"},
+                                         "acquire": {"cmd": "stale"}}}
+    merged = yaml.safe_load(run_stage.merge_lock_entry(shared, local, "bias"))
+    assert merged["stages"] == {"acquire": {"cmd": "a"},
+                                "bias": {"cmd": "new"}}
+
+
+def test_push_lock_retries_when_another_stage_wrote_first(tmp_path,
+                                                          monkeypatch):
+    store = {"text": yaml.safe_dump({"stages": {"acquire": {"cmd": "a"}}}),
+             "gen": 1}
+    writes = []
+
+    def read_versioned(uri):
+        return store["text"], store["gen"]
+
+    def write_if_generation(uri, text, generation):
+        if not writes:  # a parallel stage commits between our read and write
+            writes.append("other")
+            other = yaml.safe_load(store["text"])
+            other["stages"]["preprocess"] = {"cmd": "p"}
+            store.update(text=yaml.safe_dump(other), gen=store["gen"] + 1)
+        if generation != store["gen"]:
+            return False
+        store.update(text=text, gen=generation + 1)
+        writes.append("ours")
+        return True
+
+    lock = tmp_path / "dvc.lock"
+    lock.write_text(yaml.safe_dump({"stages": {"bias": {"cmd": "b"}}}))
+    monkeypatch.setattr(run_stage, "LOCK_FILE", lock)
+    monkeypatch.setattr(run_stage, "read_versioned", read_versioned)
+    monkeypatch.setattr(run_stage, "write_if_generation",
+                        write_if_generation)
+    monkeypatch.setattr(run_stage, "upload", lambda path, uri: None)
+    monkeypatch.setattr(run_stage.time, "sleep", lambda s: None)
+    run_stage.State("gs://b/state", "r1").push_lock("bias")
+    stages = yaml.safe_load(store["text"])["stages"]
+    assert set(stages) == {"acquire", "preprocess", "bias"}
+    assert writes == ["other", "ours"]
+    assert set(yaml.safe_load(lock.read_text())["stages"]) == set(stages)

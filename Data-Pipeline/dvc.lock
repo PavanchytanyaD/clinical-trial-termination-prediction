@@ -5,9 +5,9 @@ stages:
     deps:
     - path: ../src/ingestion
       hash: md5
-      md5: 318c50bc03df1613355776e1130cf498.dir
-      size: 8367
-      nfiles: 2
+      md5: 93f23d94b692219e0a3550e3ceba9cba.dir
+      size: 23342
+      nfiles: 3
     - path: scripts/acquire.py
       hash: md5
       md5: e3b2c50fa8b6a28c169950e53095c39e
@@ -27,7 +27,7 @@ stages:
     outs:
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 7f3b3e19cd68a7349e1da5d3df61e3cd.dir
+      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
       size: 678731
       nfiles: 13
   preprocess:
@@ -35,12 +35,12 @@ stages:
     deps:
     - path: ../src/features
       hash: md5
-      md5: 750633bd67cdbd4e3973e2002d3f79f5.dir
-      size: 38086
-      nfiles: 6
+      md5: 44721ac628621851c1d940a2d710a410.dir
+      size: 85494
+      nfiles: 9
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 7f3b3e19cd68a7349e1da5d3df61e3cd.dir
+      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
       size: 678731
       nfiles: 13
     - path: scripts/preprocess.py
@@ -147,12 +147,12 @@ stages:
       size: 2740
     - path: ../src/bias
       hash: md5
-      md5: 1fd55639c152f1d531d32899045a9ffc.dir
-      size: 37279
-      nfiles: 9
+      md5: 87ec97d589f7a761bd06ea3fb0e46b85.dir
+      size: 98294
+      nfiles: 17
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 7f3b3e19cd68a7349e1da5d3df61e3cd.dir
+      md5: 62f6b41b6ffd8ef31d337418e317e42c.dir
       size: 678731
       nfiles: 13
     - path: scripts/bias.py
