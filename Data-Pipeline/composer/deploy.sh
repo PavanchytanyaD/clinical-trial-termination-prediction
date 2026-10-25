@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploy the data pipeline to Cloud Composer in the ctt-mlops project.
+# Deploy the data pipeline to Cloud Composer in the ctt-mlops project
+# (project ID ctt-mlops-project).
 # Read composer/README.md first; every step is safe to re-run.
 #
 #   BUCKET=<gcs bucket> ALERT_EMAILS=a@x.com,b@y.com ./composer/deploy.sh <step>
@@ -15,12 +16,12 @@
 #   delete     delete the Composer environment (stops the billing)
 set -euo pipefail
 
-PROJECT="${PROJECT:-ctt-mlops}"
+PROJECT="${PROJECT:-ctt-mlops-project}"
 REGION="${REGION:-us-central1}"
 ENV_NAME="${ENV_NAME:-ctt-composer}"
-REPO="${REPO:-ctt}"                       # Artifact Registry repository
+REPO="${REPO:-ctt-images}"                # Artifact Registry repository
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/data-pipeline:latest"
-BUCKET="${BUCKET:?set BUCKET to the GCS bucket for DVC data and run state}"
+BUCKET="${BUCKET:-ctt-mlops-project-data}"  # DVC data and run state
 STATE_URI="gs://${BUCKET}/data-pipeline/state"
 ALERT_EMAILS="${ALERT_EMAILS:-}"
 SECRET_NAME="ctt-pipeline-secrets"

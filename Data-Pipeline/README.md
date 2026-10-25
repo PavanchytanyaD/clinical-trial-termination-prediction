@@ -155,7 +155,7 @@ airflow dags test ctt_data_pipeline 2026-11-05 -c '{"snapshot": "20261101"}'
   `dvc.lock` records the md5 hash of every output, so each commit of
   `dvc.lock` is one exact data version, and a model can be traced back to the
   snapshot it was trained on.
-- The data itself goes to the DVC remote, a GCS bucket in `ctt-mlops`
+- The data itself goes to the DVC remote, the GCS bucket `gs://ctt-mlops-project-data` (project `ctt-mlops-project`)
   (`dvc push`); git only holds `dvc.lock` and the small `.gitignore` files.
 
 ### DVC remote
@@ -165,7 +165,7 @@ set. Set it once (everyone with access to the bucket can then pull):
 
 ```bash
 dvc remote modify gcs url gs://<bucket>/dvc-store
-gcloud auth application-default login   # Google account with access to ctt-mlops
+gcloud auth application-default login   # Google account with access to ctt-mlops-project
 dvc push      # upload the data versions in dvc.lock
 dvc pull      # download them on another machine
 ```

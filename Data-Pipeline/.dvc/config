@@ -2,4 +2,5 @@
     analytics = false
     remote = gcs
 ['remote "gcs"']
-    url = gs://CHANGE-ME-ctt-mlops-bucket/dvc-store
+    url = gs://ctt-mlops-project-data/dvc-store
+    projectname = ctt-mlops-project

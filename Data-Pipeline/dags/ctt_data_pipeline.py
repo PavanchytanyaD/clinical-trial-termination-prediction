@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 RUNNER = os.environ.get("CTT_RUNNER", "k8s")
 IMAGE = os.environ.get(
     "CTT_IMAGE",
-    "us-central1-docker.pkg.dev/ctt-mlops/ctt/data-pipeline:latest")
+    "us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest")
 STATE_URI = os.environ.get("CTT_STATE_URI", "")
 ALERT_EMAILS = [e.strip() for e in
                 os.environ.get("CTT_ALERT_EMAILS", "").split(",") if e.strip()]

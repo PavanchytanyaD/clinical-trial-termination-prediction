@@ -1,6 +1,6 @@
 # Deploying to Cloud Composer
 
-The DAG runs on Cloud Composer 3 in the `ctt-mlops` project. Each task runs
+The DAG runs on Cloud Composer 3 in the `ctt-mlops` project (project ID `ctt-mlops-project`). Each task runs
 the pipeline image in a Kubernetes pod, so Composer itself needs no extra
 Python packages.
 
@@ -12,9 +12,9 @@ the environment again takes about 25 minutes.
 
 ## Prerequisites
 
-- `gcloud` logged in with an account that can use `ctt-mlops` (Composer,
+- `gcloud` logged in with an account that can use `ctt-mlops-project` (Composer,
   Cloud Build, Artifact Registry and Storage admin roles), and
-  `gcloud config set project ctt-mlops`.
+  `gcloud config set project ctt-mlops-project`.
 - A GCS bucket for the DVC data and the run state (`BUCKET`).
 - The environment's service account needs `roles/storage.objectAdmin` on that
   bucket, so the pods can read and write data.
@@ -43,7 +43,7 @@ in the image, not the code in the repository.
 | Variable | Value |
 |---|---|
 | `CTT_RUNNER` | `k8s` |
-| `CTT_IMAGE` | `us-central1-docker.pkg.dev/ctt-mlops/ctt/data-pipeline:latest` |
+| `CTT_IMAGE` | `us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest` |
 | `CTT_STATE_URI` | `gs://<bucket>/data-pipeline/state` |
 | `CTT_ALERT_EMAILS` | failure-email recipients |
 | `CTT_SMTP_SECRET` | `ctt-pipeline-secrets` (SMTP / ALERT / AACT keys) |
