@@ -63,3 +63,39 @@ def test_read_file_keeps_phase_na(tmp_path):
     df = read_file(path, {"nct_id": "nct_id", "phase": "phase"})
     assert df.phase.iloc[0] == "NA"
     assert pd.isna(df.phase.iloc[1])
+
+
+SNAPSHOT = {
+    "studies": ["nct_id|overall_status|phase|study_type|start_date",
+                "NCT00000001|COMPLETED|NA|INTERVENTIONAL|2015-03-01",
+                "NCT00000002|TERMINATED|PHASE2|INTERVENTIONAL|2019-01"],
+    "sponsors": ["nct_id|agency_class|lead_or_collaborator",
+                 "NCT00000001|INDUSTRY|lead", "NCT00000001|NIH|collaborator",
+                 "NCT00000002|OTHER|lead"],
+    "eligibilities": ["nct_id|gender|child|adult|older_adult",
+                      "NCT00000001|ALL|f|t|t", "NCT00000002|FEMALE|f|t|f"],
+    "countries": ["nct_id|name", "NCT00000001|United States",
+                  "NCT00000001|Canada"],
+    "browse_conditions": ["nct_id|downcase_mesh_term",
+                          "NCT00000002|neoplasms",
+                          "NCT00000002|carcinoma"],
+}
+
+
+def test_snapshot_source(tmp_path):
+    for table, lines in SNAPSHOT.items():
+        (tmp_path / f"{table}.txt").write_text("\n".join(lines) + "\n")
+    df = load_trials({"source": "snapshot", "snapshot_dir": str(tmp_path)})
+    df = df.set_index("nct_id")
+    assert set(REQUIRED_COLUMNS) <= set(df.columns) | {"nct_id"}
+    assert df.loc["NCT00000001", "phase"] == "NA"
+    assert df.loc["NCT00000001", "sponsor_class"] == "INDUSTRY"
+    assert df.loc["NCT00000001", "countries"] == "Canada|United States"
+    assert pd.isna(df.loc["NCT00000002", "countries"])
+    assert df.loc["NCT00000002", "therapeutic_areas"] == "neoplasms"
+
+
+def test_snapshot_source_missing_dir(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_trials({"source": "snapshot",
+                     "snapshot_dir": str(tmp_path / "nope")})

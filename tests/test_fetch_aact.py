@@ -3,6 +3,7 @@ import zipfile
 import pytest
 import requests
 
+from src.error_handling import DataUnavailableError
 from src.ingestion import fetch_aact
 from src.ingestion.fetch_aact import (
     download, export_from_db, extract_tables, snapshot_name, validate,
@@ -96,7 +97,7 @@ def test_download_gives_up(tmp_path, monkeypatch):
         raise requests.ConnectionError("network down")
 
     monkeypatch.setattr(fetch_aact.requests, "get", fake_get)
-    with pytest.raises(RuntimeError, match="after 2 attempts"):
+    with pytest.raises(DataUnavailableError, match="after 2 attempts"):
         download("https://example.org/a.zip", tmp_path / "a.zip",
                  retries=2, backoff_seconds=0)
     assert not (tmp_path / "a.zip").exists()

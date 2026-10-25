@@ -30,6 +30,8 @@ from pathlib import Path
 
 import requests
 
+from src.error_handling import (ConfigError, DataUnavailableError,
+                                 DataValidationError)
 from src.logging_utils import run_main
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,7 @@ def download(url, dest, retries=3, backoff_seconds=10, chunk_bytes=1 << 20):
         except requests.RequestException as e:
             part.unlink(missing_ok=True)
             if attempt == retries:
-                raise RuntimeError(
+                raise DataUnavailableError(
                     f"download failed after {retries} attempts: {url}: {e}"
                 ) from e
             logger.warning("download attempt %d/%d failed: %s", attempt,
@@ -84,13 +86,15 @@ def extract_tables(zip_path, out_dir, tables=REQUIRED_TABLES):
     try:
         z = zipfile.ZipFile(zip_path)
     except (zipfile.BadZipFile, FileNotFoundError) as e:
-        raise ValueError(f"cannot open AACT export {zip_path}: {e}") from e
+        raise DataValidationError(
+            f"cannot open AACT export {zip_path}: {e}") from e
     with z:
         members = {Path(name).name: name for name in z.namelist()
                    if not name.endswith("/")}
         missing = [t for t in tables if f"{t}.txt" not in members]
         if missing:
-            raise ValueError(f"{zip_path} is missing tables: {missing}")
+            raise DataValidationError(
+                f"{zip_path} is missing tables: {missing}")
         for t in tables:
             with z.open(members[f"{t}.txt"]) as src, \
                     open(out_dir / f"{t}.txt", "wb") as dst:
@@ -104,12 +108,12 @@ def export_from_db(out_dir, tables=REQUIRED_TABLES, user=None,
     user = user or os.environ.get("AACT_USER")
     password = password or os.environ.get("AACT_PASSWORD")
     if not user or not password:
-        raise RuntimeError(
+        raise ConfigError(
             "set AACT_USER and AACT_PASSWORD to read from the AACT database")
     try:
         import psycopg2  # only needed for this source
     except ImportError as e:
-        raise RuntimeError(
+        raise ConfigError(
             "psycopg2 is not installed; run pip install -r requirements.txt"
         ) from e
 
@@ -119,7 +123,7 @@ def export_from_db(out_dir, tables=REQUIRED_TABLES, user=None,
         conn = psycopg2.connect(host=host, port=port, dbname=AACT_DBNAME,
                                 user=user, password=password)
     except psycopg2.OperationalError as e:
-        raise RuntimeError(
+        raise DataUnavailableError(
             f"could not connect to the AACT database at {host}: {e}") from e
     try:
         with conn, conn.cursor() as cur:
@@ -145,14 +149,18 @@ def validate(out_dir, tables=REQUIRED_TABLES):
     for t in tables:
         path = out_dir / f"{t}.txt"
         if not path.exists():
-            raise FileNotFoundError(f"missing table file: {path}")
-        with open(path, encoding="utf-8") as f:
-            header = f.readline().rstrip("\r\n").split("|")
-            first_row = f.readline()
+            raise DataUnavailableError(f"missing table file: {path}")
+        try:
+            with open(path, encoding="utf-8") as f:
+                header = f.readline().rstrip("\r\n").split("|")
+                first_row = f.readline()
+        except UnicodeDecodeError as e:
+            raise DataValidationError(
+                f"{path} is not valid UTF-8 (corrupt file?): {e}") from e
         if "nct_id" not in header:
-            raise ValueError(f"{path} has no nct_id column")
+            raise DataValidationError(f"{path} has no nct_id column")
         if not first_row.strip():
-            raise ValueError(f"{path} has no data rows")
+            raise DataValidationError(f"{path} has no data rows")
         sizes[t] = path.stat().st_size
     logger.info("validated %d tables in %s", len(sizes), out_dir)
     return sizes

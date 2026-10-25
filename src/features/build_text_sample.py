@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.error_handling import DataUnavailableError, DataValidationError
 from src.features.text_cleaning import clean_text, split_eligibility
 from src.logging_utils import run_main
 
@@ -29,7 +30,7 @@ ELIGIBILITY_COLUMNS = ["inclusion", "exclusion", "n_inclusion",
 _OUTCOME_ORDER = {"primary": 0, "secondary": 1}
 
 
-class AACTTableError(RuntimeError):
+class AACTTableError(DataValidationError, RuntimeError):
     """An AACT table file exists but cannot be read."""
 
 
@@ -42,7 +43,7 @@ def read_chunks(export_dir, table, usecols, nct_ids=None, chunksize=100_000):
     """
     path = Path(export_dir) / f"{table}.txt"
     if not path.exists():
-        raise FileNotFoundError(f"AACT table not found: {path}")
+        raise DataUnavailableError(f"AACT table not found: {path}")
     try:
         reader = pd.read_csv(path, sep="|", usecols=usecols, dtype=str,
                              keep_default_na=False, chunksize=chunksize)
