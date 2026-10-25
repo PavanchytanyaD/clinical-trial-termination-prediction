@@ -243,3 +243,32 @@ stages:
       hash: md5
       md5: b49dd2c9a302d195cac7afdc61e87210
       size: 138
+  text:
+    cmd: python -m scripts.text
+    deps:
+    - path: ../src/features/build_text_sample.py
+      hash: md5
+      md5: ab02064eb384828466fc4e2da1cf64a4
+      size: 8241
+    - path: ../src/features/text_cleaning.py
+      hash: md5
+      md5: c02b16e4f490fb0130d9952c38b98f24
+      size: 3655
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/text.py
+      hash: md5
+      md5: f3b423b2f8cf42a7f717b1da915b55a3
+      size: 1554
+    outs:
+    - path: data/processed/text_all.jsonl
+      hash: md5
+      md5: db07594d30f1abd3198118fd95bac1ee
+      size: 357970
+    - path: data/processed/text_all.meta.json
+      hash: md5
+      md5: 59c3121cdb8a896e7361f8774f9e37c8
+      size: 537

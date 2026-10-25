@@ -31,6 +31,9 @@ x-airflow: &airflow
     CTT_ALERT_EMAILS: ${CTT_ALERT_EMAILS:-}
     CTT_SOURCE: ${CTT_SOURCE:-sample}
     CTT_ZIP: ${CTT_ZIP:-}
+    # Laptop: Google client libraries (embeddings stage -> Vertex AI) use the
+    # mounted gcloud credentials. Empty on the VM: its service account.
+    GOOGLE_APPLICATION_CREDENTIALS: ${GCLOUD_CONFIG_DIR:+${GCLOUD_CONFIG_DIR}/application_default_credentials.json}
   volumes:
     - ../..:/opt/ctt
     # Laptop only: the gcloud folder whose credentials the DVC remote uses

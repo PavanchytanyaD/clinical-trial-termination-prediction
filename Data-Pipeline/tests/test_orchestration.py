@@ -38,7 +38,7 @@ def test_bad_overrides_are_rejected(bad, tmp_path):
 def test_stage_graph_matches_dvc_yaml():
     assert list(run_stage.stages()) == ["acquire", "preprocess", "bias",
                                         "schema_stats", "anomalies",
-                                        "validate"]
+                                        "validate", "text", "embeddings"]
     produced = run_stage.produced_by()
     assert produced["data/raw/aact_snapshot"] == "acquire"
     assert produced["data/processed/structured_features.csv"] == "preprocess"
@@ -46,6 +46,9 @@ def test_stage_graph_matches_dvc_yaml():
     assert "reports/validation/summary.json" not in produced
     upstream = {produced.get(d) for d in run_stage.stage_deps("validate")}
     assert upstream >= {"preprocess", "schema_stats"}
+    assert produced["data/processed/embeddings"] == "embeddings"
+    assert {produced.get(d) for d in run_stage.stage_deps("embeddings")} \
+        >= {"text"}
 
 
 def test_unknown_stage(monkeypatch):
@@ -178,7 +181,8 @@ def test_alert_failure_does_not_raise(monkeypatch):
 
 # ---------------------------------------------------------------- DAG
 def load_dag(runner, monkeypatch):
-    pytest.importorskip("airflow")
+    # "airflow" alone also matches the airflow/ compose folder here
+    pytest.importorskip("airflow.models")
     from airflow.models import DagBag
     monkeypatch.setenv("CTT_RUNNER", runner)
     bag = DagBag(dag_folder=str(ROOT / "dags"), include_examples=False)
@@ -196,10 +200,12 @@ def test_dag_structure(runner, operator, monkeypatch):
         "acquire": [],
         "preprocess": ["acquire"],
         "bias": ["acquire"],
+        "text": ["acquire"],
+        "embeddings": ["text"],
         "schema_stats": ["preprocess"],
         "anomalies": ["preprocess"],
         "validate": ["schema_stats"],
-        "publish": ["anomalies", "bias", "validate"],
+        "publish": ["anomalies", "bias", "embeddings", "validate"],
     }
     for t in dag.tasks:
         assert type(t).__name__ == operator

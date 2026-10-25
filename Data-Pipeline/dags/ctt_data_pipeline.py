@@ -1,12 +1,16 @@
 """Airflow DAG: monthly data pipeline for clinical-trial termination.
 
                +--> preprocess --+--> schema_stats --> validate --+
-    acquire ---+                 +--> anomalies -------------------+--> publish
-               +--> bias ------------------------------------------+
+               |                 +--> anomalies -------------------+
+    acquire ---+--> bias ------------------------------------------+--> publish
+               +--> text --> embeddings ---------------------------+
 
 Each task runs one DVC stage (scripts/run_stage.py), so DVC versions every
 output and skips stages whose inputs did not change; Airflow schedules the
 run, orders the steps, retries failed steps and emails on failure.
+`embeddings` computes the BioBERT text embeddings in a Vertex AI GPU job
+(params.yaml embeddings.backend) and waits for it; DVC skips it when the
+text did not change.
 Independent branches run in parallel (bias needs only the raw snapshot;
 schema_stats and anomalies both need only the features), which shortens the
 run; see docs/pipeline_optimization.md.
@@ -154,7 +158,7 @@ with DAG(
     catchup=False,
     # runs must not overlap: a run's stages share dvc.lock and params.yaml
     max_active_runs=1,
-    dagrun_timeout=timedelta(hours=8),
+    dagrun_timeout=timedelta(hours=12),
     default_args=default_args,
     tags=["ctt", "data-pipeline", "dvc"],
     doc_md=__doc__,
@@ -164,6 +168,8 @@ with DAG(
                                "acquire.zip": ZIP})
     preprocess = step("preprocess")
     bias = step("bias")
+    text = step("text")
+    embeddings = step("embeddings", timeout=timedelta(hours=10))
     schema_stats = step("schema_stats")
     anomalies = step("anomalies", timeout=timedelta(minutes=45))
     validate = step("validate", timeout=timedelta(minutes=45))
@@ -171,7 +177,8 @@ with DAG(
     # all_success), so no bad data version is recorded
     publish = step("publish", timeout=timedelta(minutes=30))
 
-    acquire >> [preprocess, bias]
+    acquire >> [preprocess, bias, text]
     preprocess >> [schema_stats, anomalies]
     schema_stats >> validate
-    [validate, anomalies, bias] >> publish
+    text >> embeddings
+    [validate, anomalies, bias, embeddings] >> publish

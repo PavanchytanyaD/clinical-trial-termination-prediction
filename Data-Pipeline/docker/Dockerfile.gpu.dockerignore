@@ -1,0 +1,18 @@
+# Used by BuildKit for docker/Dockerfile.gpu (build context = repository root).
+**/.git
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv
+**/venv
+**/.env
+**/service-account*.json
+data/
+mlruns/
+docs/
+Data-Pipeline/data/
+Data-Pipeline/reports/
+Data-Pipeline/logs/
+Data-Pipeline/.dvc/cache/
+Data-Pipeline/.dvc/tmp/
+Data-Pipeline/.dvc/config.local

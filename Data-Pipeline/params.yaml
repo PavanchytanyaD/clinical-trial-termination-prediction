@@ -43,3 +43,17 @@ validate:
   max_stopped_rate_change: 0.05
   max_missing_increase: 0.05
   max_mean_shift_std: 0.5     # numeric mean shift, in baseline std units
+
+embeddings:
+  # vertex: Vertex AI custom job on a T4 GPU (image biobert-gpu, built with
+  #         ./composer/deploy.sh gpu-image); the result comes back here
+  # local:  this machine (needs torch + transformers, root requirements.txt)
+  backend: vertex
+  max_trials: 0               # embed only the first N trials (0 = all)
+  model: dmis-lab/biobert-base-cased-v1.2
+  batch_size: 32
+  max_length: 512             # tokens per window
+  stride: 64                  # tokens shared by consecutive windows
+  machine_type: n1-standard-8
+  accelerator: NVIDIA_TESLA_T4
+  timeout_hours: 8

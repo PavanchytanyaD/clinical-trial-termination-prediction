@@ -13,6 +13,7 @@
 #   acquire --+--> preprocess --+--> schema_stats --> validate
 #             |                 +--> anomalies
 #             +--> bias
+#             +--> text --> embeddings   (BioBERT, on a Vertex AI GPU)
 stages:
   acquire:
     cmd: python -m scripts.acquire
@@ -102,3 +103,25 @@ stages:
     metrics:
       - reports/validation/summary.json:
           cache: false
+
+  text:
+    cmd: python -m scripts.text
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/text.py
+      - ../src/features/build_text_sample.py
+      - ../src/features/text_cleaning.py
+    outs:
+      - data/processed/text_all.jsonl
+      - data/processed/text_all.meta.json
+
+  embeddings:
+    cmd: python -m scripts.embeddings
+    deps:
+      - data/processed/text_all.jsonl
+      - scripts/embeddings.py
+      - ../src/features/biobert_embeddings.py
+    params:
+      - embeddings
+    outs:
+      - data/processed/embeddings

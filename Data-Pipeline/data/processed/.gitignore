@@ -1,3 +1,5 @@
 /structured_features.csv
 /structured_features.meta.json
 /trial_slices.csv
+/text_all.jsonl
+/text_all.meta.json
