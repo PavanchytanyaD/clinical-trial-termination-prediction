@@ -9,6 +9,7 @@ from scripts.acquire import check_tables
 from scripts.config import REQUIRED_TABLES
 from scripts.preprocess import (ID_COLUMNS, build, check_contract,
                                 label_from_status)
+from src.error_handling import ConfigError
 
 
 def test_sample_snapshot_has_every_table(snapshot_dir):
@@ -73,5 +74,5 @@ def test_check_contract_rejects_duplicates(features):
 
 
 def test_unknown_mode_is_an_error(snapshot_dir):
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigError):
         build("magic", snapshot_dir)

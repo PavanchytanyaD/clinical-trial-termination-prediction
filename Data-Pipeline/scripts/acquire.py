@@ -7,10 +7,11 @@ The source is set in params.yaml (acquire.source):
   zip     AACT monthly flat-file export, path or URL (acquire.zip)
   db      AACT cloud PostgreSQL (AACT_USER / AACT_PASSWORD in the environment)
 
-zip and db call src/ingestion/fetch_aact.py (data acquisition is owned by
-another workstream), so this step only fixes where the snapshot lands and
-how it is checked. Every source must produce the 12 tables in REQUIRED_TABLES,
-each with an nct_id column and at least one row.
+zip and db call src/ingestion/fetch_aact.py (Task 1, data acquisition), so
+this step only fixes where the snapshot lands and how it is checked. Every
+source must produce the 12 tables in REQUIRED_TABLES, each with an nct_id
+column and at least one row (fetch_aact.validate, which raises
+DataUnavailableError / DataValidationError from src/error_handling).
 
     python -m scripts.acquire
 """
@@ -20,47 +21,23 @@ import json
 import logging
 import re
 import shutil
-import sys
 from pathlib import Path
 
 from scripts import sample_snapshot
-from scripts.config import RAW_DIR, REPO_ROOT, REQUIRED_TABLES, load_params
+from scripts.config import RAW_DIR, REQUIRED_TABLES, load_params
 from scripts.tracking import fingerprint, tracked_step
+from src.error_handling import ConfigError
+from src.ingestion import fetch_aact
 
 logger = logging.getLogger("acquire")
 
 
-def ingestion_module():
-    """Import src.ingestion.fetch_aact from the repository root."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    try:
-        from src.ingestion import fetch_aact
-    except ImportError as e:
-        raise RuntimeError(
-            "src/ingestion/fetch_aact.py is not in this checkout (it is on "
-            "the nithish/s1-text-cleaning branch until merged). Use "
-            "acquire.source: sample, or merge the ingestion code.") from e
-    return fetch_aact
-
-
 def check_tables(out_dir, tables=REQUIRED_TABLES):
-    """Each table file exists, has an nct_id column and at least one row."""
-    out_dir = Path(out_dir)
-    sizes = {}
-    for t in tables:
-        path = out_dir / f"{t}.txt"
-        if not path.exists():
-            raise FileNotFoundError(f"missing table file: {path}")
-        with open(path, encoding="utf-8") as f:
-            header = f.readline().rstrip("\r\n").split("|")
-            first_row = f.readline()
-        if "nct_id" not in header:
-            raise ValueError(f"{path} has no nct_id column")
-        if not first_row.strip():
-            raise ValueError(f"{path} has no data rows")
-        sizes[t] = path.stat().st_size
-    return sizes
+    """Each table file exists, has an nct_id column and at least one row.
+
+    Returns file sizes in bytes (fetch_aact.validate).
+    """
+    return fetch_aact.validate(Path(out_dir), tables)
 
 
 def acquire(params, out_dir=RAW_DIR):
@@ -79,11 +56,10 @@ def acquire(params, out_dir=RAW_DIR):
             out_dir, snapshot, n_trials=int(params.get("sample_trials", 500)),
             seed=int(params.get("seed", 42)))
 
-    fetch_aact = ingestion_module()
     if source == "zip":
         zip_src = params.get("zip")
         if not zip_src:
-            raise ValueError("acquire.source is zip but acquire.zip is empty")
+            raise ConfigError("acquire.source is zip but acquire.zip is empty")
         zip_path = zip_src
         if re.match(r"https?://", zip_src):
             zip_path = fetch_aact.download(
@@ -94,8 +70,8 @@ def acquire(params, out_dir=RAW_DIR):
     elif source == "db":
         fetch_aact.export_from_db(out_dir)
     else:
-        raise ValueError(f"unknown acquire.source {source!r} "
-                         "(use sample, zip or db)")
+        raise ConfigError(f"unknown acquire.source {source!r} "
+                          "(use sample, zip or db)")
     manifest = {
         "source": source if source == "db" else params.get("zip"),
         "snapshot": snapshot,

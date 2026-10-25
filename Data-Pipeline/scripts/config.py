@@ -4,12 +4,18 @@ Every path is relative to the Data-Pipeline folder, so the steps work from
 any working directory, inside the Docker image and on a laptop.
 """
 
+import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
+# The ingestion, feature, bias and error-handling code lives in src/ at the
+# repository root (the Docker image keeps the same layout).
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+BIAS_CONFIG = REPO_ROOT / "configs" / "bias_config.yaml"
 
 PARAMS_FILE = ROOT / "params.yaml"
 DVC_FILE = ROOT / "dvc.yaml"
@@ -20,6 +26,7 @@ RAW_DIR = ROOT / "data" / "raw" / "aact_snapshot"
 PROCESSED_DIR = ROOT / "data" / "processed"
 FEATURES_CSV = PROCESSED_DIR / "structured_features.csv"
 FEATURES_META = PROCESSED_DIR / "structured_features.meta.json"
+TRIAL_SLICES = PROCESSED_DIR / "trial_slices.csv"
 
 SCHEMA_DIR = ROOT / "schema"
 GENERATED_DIR = SCHEMA_DIR / "generated"
@@ -36,6 +43,12 @@ VALIDATION_DIR = ROOT / "reports" / "validation"
 VALIDATION_JSON = VALIDATION_DIR / "validation.json"
 VALIDATION_SUMMARY = VALIDATION_DIR / "summary.json"
 VALIDATION_MD = VALIDATION_DIR / "validation.md"
+
+BIAS_DIR = ROOT / "reports" / "bias"
+ANOMALY_DIR = ROOT / "reports" / "anomalies"
+ANOMALY_JSON = ANOMALY_DIR / "anomalies.json"
+ANOMALY_MD = ANOMALY_DIR / "anomalies.md"
+ANOMALY_SUMMARY = ANOMALY_DIR / "summary.json"
 
 LOG_DIR = ROOT / "logs"
 RUNS_DIR = LOG_DIR / "runs"

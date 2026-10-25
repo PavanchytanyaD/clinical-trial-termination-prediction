@@ -21,14 +21,13 @@ start_date, study_first_submitted_date, then numeric features.
 
 import json
 import logging
-import sys
 
 import numpy as np
 import pandas as pd
 
-from scripts.config import (FEATURES_CSV, FEATURES_META, RAW_DIR, REPO_ROOT,
-                            load_params)
+from scripts.config import FEATURES_CSV, FEATURES_META, RAW_DIR, load_params
 from scripts.tracking import fingerprint, tracked_step
+from src.error_handling import ConfigError, DataValidationError
 
 logger = logging.getLogger("preprocess")
 
@@ -40,8 +39,6 @@ PLACEHOLDER_PHASES = ["NA", "EARLY_PHASE1", "PHASE1", "PHASE1/PHASE2",
 
 
 def feature_module():
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
     from src.features import structured_features
     return structured_features
 
@@ -114,7 +111,7 @@ def build(mode="auto", export_dir=RAW_DIR):
             module = feature_module()
         except ImportError:
             if mode == "structured_features":
-                raise RuntimeError(
+                raise ConfigError(
                     "src/features/structured_features.py is not in this "
                     "checkout; use preprocess.mode: placeholder or auto")
             logger.warning("src.features.structured_features not found; "
@@ -123,7 +120,7 @@ def build(mode="auto", export_dir=RAW_DIR):
             out, meta = module.build_features(export_dir)
             return out, meta, "structured_features"
     if mode not in ("auto", "placeholder"):
-        raise ValueError(f"unknown preprocess.mode {mode!r}")
+        raise ConfigError(f"unknown preprocess.mode {mode!r}")
     out, meta = placeholder_features(export_dir)
     return out, meta, "placeholder"
 
@@ -131,9 +128,10 @@ def build(mode="auto", export_dir=RAW_DIR):
 def check_contract(df):
     missing = [c for c in ID_COLUMNS if c not in df.columns]
     if missing:
-        raise ValueError(f"feature table is missing columns {missing}")
+        raise DataValidationError(
+            f"feature table is missing columns {missing}")
     if df.nct_id.duplicated().any():
-        raise ValueError("feature table has duplicate nct_id rows")
+        raise DataValidationError("feature table has duplicate nct_id rows")
 
 
 def main():
