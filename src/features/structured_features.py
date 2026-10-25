@@ -7,7 +7,8 @@ LEAKAGE_RISK are design fields that sponsors can edit after a trial stops
 (sites are often removed from withdrawn trials), so check them before use.
 
 Categoricals are one-hot encoded against fixed category lists, so every
-snapshot gets the same columns, with explicit _missing and _other levels.
+snapshot gets the same columns, with explicit _missing and _unlisted levels
+(_unlisted, not _other, because several AACT fields have a real OTHER value).
 Numeric fields get a _missing flag and are filled with 0, so nothing is
 fitted on the full data.
 
@@ -52,7 +53,8 @@ LEAKAGE_EXCLUDED = {
         "set when countries are dropped from a trial",
 }
 LEAKAGE_RISK = ["n_facilities", "has_us_facility", "has_single_facility",
-                "n_countries"]
+                "n_countries", "n_facilities_missing",
+                "has_us_facility_missing", "has_single_facility_missing"]
 
 CATEGORIES = {
     "study_type": ["INTERVENTIONAL", "OBSERVATIONAL", "EXPANDED_ACCESS"],
@@ -131,10 +133,15 @@ def column_name(text):
 
 
 def one_hot(values, prefix, categories):
-    """One column per category plus <prefix>_other and <prefix>_missing."""
+    """One column per category plus <prefix>_unlisted and <prefix>_missing.
+
+    The catch-all is not called _other: several AACT fields have a real OTHER
+    category (lead sponsor, primary purpose, ...), whose column would be
+    overwritten.
+    """
     v = values.fillna("").astype(str).str.strip()
     cols = {f"{prefix}_{column_name(c)}": (v == c) for c in categories}
-    cols[f"{prefix}_other"] = (v != "") & ~v.isin(categories)
+    cols[f"{prefix}_unlisted"] = (v != "") & ~v.isin(categories)
     cols[f"{prefix}_missing"] = v == ""
     return pd.DataFrame(cols, index=values.index).astype(np.int8)
 
@@ -297,6 +304,8 @@ def build_features(export_dir):
         return df
 
     studies = table("studies", STUDY_COLUMNS).drop_duplicates("nct_id")
+    if studies.empty:
+        raise ValueError(f"no trials in {export_dir}/studies.txt")
     index = pd.Index(studies.nct_id, name="nct_id")
     counts = pd.concat(
         criteria_counts(c) for c in read_chunks(
@@ -355,6 +364,11 @@ def build_features(export_dir):
         "area_rates": area_rates,
         "feature_columns": list(features.columns),
     }
+    labels = meta["label_counts"]
+    if labels["stopped"] + labels["completed"] == 0:
+        raise ValueError(
+            "no trial has a COMPLETED, TERMINATED, WITHDRAWN or SUSPENDED "
+            "status; check the overall_status format of this export")
     return out, meta
 
 

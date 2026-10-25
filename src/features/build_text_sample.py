@@ -96,7 +96,7 @@ def outcomes_texts(export_dir, nct_ids):
                 desc = clean_text(description)
                 text = f"{text}: {desc}" if text else desc
             if text:
-                order = _OUTCOME_ORDER.get(kind, 2)
+                order = _OUTCOME_ORDER.get(str(kind).lower(), 2)
                 by_trial[nct_id].append((order, text))
     logger.info("built planned outcomes for %d trials", len(by_trial))
     return {k: "\n".join(t for _, t in sorted(v, key=lambda p: p[0]))

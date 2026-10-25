@@ -83,7 +83,7 @@ def test_label_from_status():
 
 def test_one_hot_fixed_columns():
     f = one_hot(pd.Series(["A", "", "Z", None]), "x", ["A", "B"])
-    assert list(f.columns) == ["x_a", "x_b", "x_other", "x_missing"]
+    assert list(f.columns) == ["x_a", "x_b", "x_unlisted", "x_missing"]
     assert f.values.tolist() == [[1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0],
                                  [0, 0, 0, 1]]
 
@@ -160,3 +160,34 @@ def test_sponsor_country_intervention_condition(built):
     assert out.loc["NCT1", "area_endocrine_system_diseases"] == 1
     assert out.loc["NCT1", "n_areas"] == 2
     assert out.loc["NCT2", "n_conditions"] == 2
+
+
+def test_real_other_category_is_kept(built):
+    out, _ = built
+    # NCT2's lead sponsor class is OTHER; it must not be overwritten by the
+    # catch-all column for values outside the list
+    assert out.loc["NCT2", "lead_sponsor_other"] == 1
+    assert out.loc["NCT2", "lead_sponsor_unlisted"] == 0
+
+
+def test_facility_missing_flags_are_leakage_risk(built):
+    _, meta = built
+    for col in ["n_facilities_missing", "has_us_facility_missing",
+                "has_single_facility_missing"]:
+        assert col in LEAKAGE_RISK and col in meta["feature_columns"]
+
+
+def test_empty_snapshot_is_an_error(export_dir):
+    (export_dir / "studies.txt").write_text(TABLES["studies"][0] + "\n")
+    with pytest.raises(ValueError, match="no trials"):
+        build_features(export_dir)
+
+
+def test_unknown_status_format_is_an_error(export_dir):
+    lines = [TABLES["studies"][0]] + [
+        line.replace("COMPLETED", "Completed").replace("WITHDRAWN",
+                                                       "Withdrawn")
+        for line in TABLES["studies"][1:]]
+    (export_dir / "studies.txt").write_text("\n".join(lines) + "\n")
+    with pytest.raises(ValueError, match="overall_status format"):
+        build_features(export_dir)

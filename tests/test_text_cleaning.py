@@ -59,3 +59,12 @@ def test_criterion_mentioning_exclusion_is_not_a_header():
     e = split_eligibility(raw)
     assert e.exclusion == []
     assert len(e.inclusion) == 1
+
+
+def test_bullets_stripped_but_numbers_and_operators_kept():
+    e = split_eligibility(
+        "Inclusion Criteria:~1. Age 18 or older~2)Signed consent~"
+        "* Adults~1.5 x ULN or lower~\\>= 18 years~-20 C storage")
+    assert e.inclusion == ["Age 18 or older", "Signed consent", "Adults",
+                           "1.5 x ULN or lower", ">= 18 years",
+                           "-20 C storage"]
