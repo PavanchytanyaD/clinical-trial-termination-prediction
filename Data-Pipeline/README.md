@@ -1,29 +1,36 @@
 # Data Pipeline
 
 Monthly data pipeline for the clinical-trial early-termination project. It
-covers four parts of the data pipeline assignment:
+ties every part of the data pipeline assignment together:
 
 | Assignment item | Where |
 |---|---|
+| 1. Data acquisition | `scripts/acquire.py` calls `../src/ingestion/fetch_aact.py` |
+| 2. Data preprocessing | `scripts/preprocess.py` calls `../src/features/structured_features.py` |
+| 3. Test modules | `tests/` here and `../tests/` |
 | 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`, runs on Cloud Composer |
 | 5. Data versioning with DVC | `dvc.yaml`, `dvc.lock`, `.dvc/config` (GCS remote) |
 | 6. Tracking and logging | `scripts/tracking.py`, `scripts/alerts.py` |
 | 7. Data schema and statistics generation | `scripts/schema_stats.py`, `scripts/validate.py`, `schema/` |
+| 8. Anomaly detection and alerts | `scripts/anomalies.py` |
+| 9. Pipeline flow optimization | `docs/pipeline_optimization.md` |
+| Bias detection and mitigation | `scripts/bias.py` calls `../src/bias/` |
 
-Data acquisition (item 1) and preprocessing (item 2) belong to other
-workstreams. The pipeline calls them through two small adapters
-(`scripts/acquire.py`, `scripts/preprocess.py`). Until that code is merged,
-the adapters fall back to placeholders, so the whole pipeline already runs
-end to end.
+The stages call the team's shared code in `../src/` (ingestion, features,
+bias, error handling). Without an AACT account, `acquire` writes a seeded
+placeholder snapshot in the AACT format, so the whole pipeline runs end to
+end anywhere.
 
 ## How it fits together
 
 ```
            Cloud Composer (Airflow)  -- schedule, order, retries, failure email
                        |
-   acquire -> preprocess -> schema_stats -> validate -> publish
-      |           |             |              |           |
-      +-----------+------ each task = one DVC stage -------+
+               +--> preprocess --+--> schema_stats --> validate --+
+    acquire ---+                 +--> anomalies -------------------+--> publish
+               +--> bias ------------------------------------------+
+                       |
+             each task = one DVC stage (scripts/run_stage.py)
                        |
         DVC: tracks inputs, params and outputs (dvc.lock),
              skips unchanged stages, stores every data version in GCS
@@ -33,7 +40,9 @@ end to end.
 |---|---|---|
 | `acquire` | Writes one AACT snapshot (12 tables). Source `sample` (placeholder), `zip` or `db` (calls `src/ingestion/fetch_aact.py`) | `data/raw/aact_snapshot/` |
 | `preprocess` | One row per trial with the label and features. Calls `src/features/structured_features.py` when present, else a placeholder | `data/processed/structured_features.csv` |
+| `bias` | Slices the finished trials (phase, sponsor, region, area, gender, age group, era), flags under-represented groups and rate gaps, reweights them (`src/bias/`) | `reports/bias/`, `data/processed/trial_slices.csv` |
 | `schema_stats` | Per-column statistics, and a Great Expectations suite (the schema) inferred from the snapshot | `reports/statistics/`, `schema/generated/` |
+| `anomalies` | Flags duplicate or malformed ids, invalid labels, impossible values (critical) and missing-value spikes, outliers, bad dates (warnings); emails an alert, stops the run on critical findings | `reports/anomalies/` |
 | `validate` | Checks the snapshot against the frozen baseline schema and statistics; stops the run on critical problems and emails an alert | `reports/validation/` |
 | `publish` | Pushes every output to the DVC remote and writes a data-version record | `logs/versions/`, GCS `state/versions/` |
 
@@ -46,7 +55,9 @@ Data-Pipeline/
 |  |- acquire.py               stage 1 adapter (ingestion code or placeholder)
 |  |- sample_snapshot.py       placeholder AACT snapshot generator
 |  |- preprocess.py            stage 2 adapter (feature code or placeholder)
+|  |- bias.py                  bias detection and mitigation on the snapshot
 |  |- schema_stats.py          statistics + Great Expectations schema
+|  |- anomalies.py             anomaly detection + alerts
 |  |- validate.py              schema validation + drift checks + alerts
 |  |- run_stage.py             runs one DVC stage (what each Airflow task does)
 |  |- tracking.py              logging and per-step run records (+ MLflow)
@@ -54,6 +65,7 @@ Data-Pipeline/
 |  |- config.py                paths and params
 |- schema/baseline/            frozen schema and statistics (committed)
 |- tests/                      unit tests (pytest)
+|- docs/                       pipeline optimization note and Gantt charts
 |- docker/Dockerfile           image the Composer tasks run
 |- composer/                   Cloud Composer deployment (deploy.sh, README)
 |- dvc.yaml, params.yaml       DVC stages and their parameters
@@ -97,8 +109,9 @@ need `src/ingestion/fetch_aact.py` in the checkout.
 
 `dags/ctt_data_pipeline.py` defines the DAG `ctt_data_pipeline`:
 
-- `acquire >> preprocess >> schema_stats >> validate >> publish`, run on the
-  5th of every month at 06:00 UTC (after the monthly AACT export), or
+- `acquire` first, then `preprocess` and `bias` in parallel, then
+  `schema_stats` and `anomalies` in parallel, then `validate`, then
+  `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
   triggered by hand with a config such as
   `{"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}`.
 - Every task runs one DVC stage with `python -m scripts.run_stage <stage>`.
@@ -109,8 +122,11 @@ need `src/ingestion/fetch_aact.py` in the checkout.
 - 2 retries with exponential backoff, a timeout per task and per run,
   `max_active_runs=1` (stages share `dvc.lock`), and an email to
   `CTT_ALERT_EMAILS` when a task fails.
-- `validate` exits with an error on critical data problems, so the run stops
-  before `publish` and no bad data version is recorded.
+- `validate` and `anomalies` exit with an error on critical data problems,
+  so the run stops before `publish` and no bad data version is recorded.
+- Parallel tasks are safe with DVC: locally DVC serializes its own writes to
+  `dvc.lock`; on Composer each pod merges only its own stage into the shared
+  `dvc.lock` with a conditional write that is retried on conflict.
 
 Because each Composer task runs in a fresh pod, `run_stage.py` keeps the
 run's shared files in GCS (`CTT_STATE_URI`): it downloads `params.yaml` and
@@ -218,6 +234,41 @@ git add schema/baseline && git commit -m "Freeze baseline schema"
 Until a baseline is frozen, `validate` checks the snapshot against its own
 suite and says so in the report.
 
+## 8. Anomaly detection and alerts
+
+`scripts/anomalies.py` checks each snapshot's feature table for values that
+are wrong or suspicious on their own (`validate` compares with the frozen
+baseline instead):
+
+| Severity | Check |
+|---|---|
+| critical | duplicate trial ids; ids that are not `NCT` + 8 digits; labels other than 0, 1 or empty; negative counts; ages outside 0-120 or a minimum above the maximum; start or registration years outside 1900 to next year; every finished trial in one class |
+| warning | a column missing for more than 30% of trials; more than 5% outliers in a column (outside Q1 - 3 IQR, Q3 + 3 IQR); dates not in `YYYY-MM` or `YYYY-MM-DD` |
+
+Values filled in during preprocessing (their `_missing` flag is set) are not
+counted as impossible. Thresholds and the fail and alert policies are in
+`params.yaml` (section `anomalies`). Findings go to
+`reports/anomalies/anomalies.md`, `.json` and `summary.json`, and an email
+alert lists them. The checks already caught one real problem: placeholder
+trials whose minimum age was above their maximum age.
+
+## Bias stage
+
+`scripts/bias.py` runs the team's bias code (`../src/bias/`, settings in
+`../configs/bias_config.yaml`) on the same snapshot as the rest of the run,
+through the `snapshot` source of `src/bias/load_data.py`, so no AACT
+database account is needed. Outputs: `reports/bias/data_slices.csv`,
+`data_summary.json` and `mitigation/`. The findings and trade-offs are
+discussed in `../docs/bias_report.md`.
+
+## 9. Pipeline flow optimization
+
+The Airflow Gantt chart of a sequential run showed every task waiting for the
+previous one, although `bias` needs only the raw snapshot and
+`schema_stats` and `anomalies` need only the features. Running them in
+parallel cut a 50,000-trial run from 30.3 s to 23.1 s. Details, both Gantt
+charts and how to reproduce the measurement: `docs/pipeline_optimization.md`.
+
 ## Interface for the acquisition and preprocessing code
 
 The adapters only need this from the other workstreams' code:
@@ -232,9 +283,11 @@ The adapters only need this from the other workstreams' code:
   completed, empty while running), `start_date`,
   `study_first_submitted_date`, then numeric features.
 
-Both already match the code on the `nithish/s1-text-cleaning` branch: with
-that branch merged, `preprocess` builds 151 features and `schema_stats`
-generates 463 expectations, all passing on the sample snapshot.
+With that code, `preprocess` builds 155 features and `schema_stats`
+generates 475 expectations, all passing on the sample snapshot. Failure
+points raise the typed errors from `../src/error_handling.py`
+(`DataUnavailableError`, `DataValidationError`, `ConfigError`), so run
+records and alert emails say what kind of failure happened.
 
 ## Tests
 
@@ -243,13 +296,14 @@ cd Data-Pipeline
 pytest
 ```
 
-40 tests cover the placeholder snapshot and features, statistics values, the
+54 tests cover the placeholder snapshot and features, statistics values, the
 inferred schema, every critical and warning check (a dropped column,
 duplicate or malformed ids, an invalid label, out-of-range values), drift
-detection, the fail and alert policies, run records, email alerts (with a
-fake SMTP server), parameter overrides, the stage graph and the DAG
-structure for both runners (the DAG tests need Airflow installed and are
-skipped otherwise).
+detection, every anomaly check, the bias stage, the fail and alert
+policies, run records, email alerts (with a fake SMTP server), parameter
+overrides, the `dvc.lock` merge under concurrent writes, the stage graph and
+the DAG shape for both runners (the 3 DAG tests need Airflow installed and
+are skipped otherwise).
 
 ## Reproducibility
 

@@ -10,67 +10,107 @@ MLOps course project (Northeastern University). The system predicts the probabil
 - **Agentic system:** looks up similar past stopped trials in the structured data and a text index, reads their recorded stop reasons, and writes a cited explanation.
 - **Platform:** Google Cloud (Vertex AI Pipelines, BigQuery, Cloud Storage, Artifact Registry, GKE, Vertex AI Vector Search), with GitHub Actions, DVC, and MLflow.
 
-## Repository structure
+## Data pipeline (assignment 2)
+
+The data pipeline runs every month: it fetches an AACT snapshot, builds the features, checks the data, reports bias, and saves a versioned copy of everything. Airflow orchestrates it and DVC versions it.
+
+```
+               +--> preprocess --+--> schema_stats --> validate --+
+    acquire ---+                 +--> anomalies -------------------+--> publish
+               +--> bias ------------------------------------------+
+```
+
+| Guideline item | Where | Owner |
+|---|---|---|
+| 1. Data acquisition | `src/ingestion/fetch_aact.py` | Nithish |
+| 2. Data preprocessing | `src/features/` | Nithish |
+| 3. Test modules | `tests/`, `Data-Pipeline/tests/` | everyone |
+| 4. Pipeline orchestration (Airflow) | `Data-Pipeline/dags/ctt_data_pipeline.py` | Pavanchytanya |
+| 5. Data versioning (DVC) | `Data-Pipeline/dvc.yaml`, `dvc.lock`, `.dvc/` | Pavanchytanya |
+| 6. Tracking and logging | `Data-Pipeline/scripts/tracking.py`, `alerts.py`, `src/logging_utils.py` | Sivapriya (with Pavanchytanya) |
+| 7. Schema and statistics | `Data-Pipeline/scripts/schema_stats.py`, `validate.py` | Sivapriya (with Pavanchytanya) |
+| 8. Anomaly detection and alerts | `Data-Pipeline/scripts/anomalies.py` | Pavanchytanya |
+| 9. Pipeline flow optimization | `Data-Pipeline/docs/pipeline_optimization.md` | Pavanchytanya |
+| Bias detection and slicing | `src/bias/slicing.py`, `slice_report.py`, `model_slices.py` | Danush, Atharva |
+| Bias mitigation and report | `src/bias/mitigate.py`, `docs/bias_report.md` | Atharva, Danush |
+| Error handling, code style, contributing | `src/error_handling.py`, `.flake8`, `CONTRIBUTING.md` | Sathyasai |
+
+Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md); deployment to Cloud Composer is in [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
+
+## Code structure
 
 ```
 clinical-trial-termination-prediction/
-|- data/        raw and processed data (DVC-tracked, not committed)
-|- src/         ingestion, features, model, and agent code
-|- pipelines/   pipeline definitions (ingest, train, evaluate, deploy)
-|- tests/       unit and integration tests
-|- docs/        project scoping document and diagrams
-|- logs/        pipeline logs (not committed)
-|- README.md
+|- Data-Pipeline/            the data pipeline (folder layout from the assignment guidelines)
+|  |- dags/                  Airflow DAG
+|  |- scripts/               one module per stage, plus tracking, alerts and the DVC stage runner
+|  |- tests/                 tests for the pipeline stages, DAG and DVC runner
+|  |- data/                  raw snapshot and processed features (DVC-tracked, not in git)
+|  |- reports/               statistics, validation, anomaly and bias reports (DVC-tracked)
+|  |- schema/baseline/       frozen schema and statistics new snapshots are validated against
+|  |- logs/                  step logs and run records (not in git)
+|  |- docs/                  pipeline optimization note and Gantt charts
+|  |- docker/, composer/     container image and Cloud Composer deployment
+|  |- dvc.yaml, params.yaml  DVC stages and their parameters
+|  \- README.md
+|- src/                      shared code the pipeline stages call
+|  |- ingestion/             AACT download / database export and table checks
+|  |- features/              text cleaning, structured features, BioBERT embeddings
+|  |- bias/                  data slicing, bias reports, mitigation
+|  |- error_handling.py      typed pipeline errors and stage logging
+|  \- logging_utils.py       console and file logging for src scripts
+|- configs/bias_config.yaml  bias slicing and mitigation settings
+|- tests/                    tests for src/
+|- docs/                     scoping document, diagrams, bias report
+|- requirements*.txt         dependencies (see Setup)
+\- CONTRIBUTING.md           logging, error handling, code style, branches
 ```
 
-## Architecture
+## Setup
 
-Training pipeline:
+Prerequisites: Python 3.11 or later (numpy 2.3 and pandas 3 do not support 3.10), Git, and for the cloud run Docker and the Google Cloud CLI.
 
-![Training pipeline](docs/diagrams/2_gcp_training.png)
+```bash
+git clone https://github.com/PavanchytanyaD/clinical-trial-termination-prediction.git
+cd clinical-trial-termination-prediction
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r Data-Pipeline/requirements.txt   # the data pipeline (includes DVC, Great Expectations, bias)
+pip install -r requirements.txt                 # src/ including PyTorch and BioBERT (optional for the pipeline)
+pip install -r requirements-dev.txt             # flake8, black, pytest
+cp Data-Pipeline/.env.example Data-Pipeline/.env   # optional: SMTP settings for email alerts, AACT account
+```
 
-Inference pipeline:
+## Run the pipeline
 
-![Inference pipeline](docs/diagrams/3_gcp_inference.png)
+Without an AACT account the pipeline runs on a seeded placeholder snapshot in the AACT format, so every step can be run and tested anywhere.
 
-## Installation (tentative)
+```bash
+cd Data-Pipeline
+dvc repro            # runs every stage that changed; a second run skips them all
+dvc metrics show     # validation and anomaly summaries
+```
 
-These steps are a plan and will be finalized as the code is built.
+- Real data: set `acquire.source` in `Data-Pipeline/params.yaml` to `zip` (with `acquire.zip`, the AACT monthly export) or `db` (with `AACT_USER` and `AACT_PASSWORD` set).
+- With Airflow on a laptop: `CTT_RUNNER=local airflow dags test ctt_data_pipeline <date>` (see [Data-Pipeline/README.md](Data-Pipeline/README.md)).
+- On Google Cloud: Cloud Composer runs the same DAG, one container per task ([Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md)).
 
-**Prerequisites:** Python 3.11 or later (numpy 2.3 and pandas 3 do not support 3.10), Git, Docker, DVC, and the Google Cloud CLI with access to the project's GCP account.
+## Data versioning and reproducibility
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/PavanchytanyaD/clinical-trial-termination-prediction.git
-   cd clinical-trial-termination-prediction
-   ```
-2. Create a virtual environment and install the dependencies:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-3. Sign in to Google Cloud:
-   ```bash
-   gcloud auth application-default login
-   ```
-4. Pull the versioned data:
-   ```bash
-   dvc pull
-   ```
+- `Data-Pipeline/dvc.yaml` declares each stage's code, inputs, parameters and outputs. `dvc.lock` stores the md5 of every output, so each commit of `dvc.lock` is one exact data version; the data itself goes to the DVC remote (a GCS bucket in the `ctt-mlops` project) with `dvc push`.
+- Return to any data version: `git checkout <commit> -- Data-Pipeline/dvc.lock && cd Data-Pipeline && dvc pull && dvc checkout`.
+- The placeholder snapshot is seeded, so a fresh clone gives the same data and the same `dvc.lock` hashes for the stage outputs.
+- Fresh-clone check: clone, install `Data-Pipeline/requirements.txt`, run `pytest` in the repository root and in `Data-Pipeline/`, then `dvc repro` in `Data-Pipeline/`.
 
-## Usage (tentative)
+## Tests
 
-These guidelines are a plan and will be updated with the exact commands as each pipeline is built.
+```bash
+pytest                          # src/ code
+cd Data-Pipeline && pytest      # pipeline stages, DAG and DVC runner (DAG tests need Airflow)
+```
 
-- **Data pipeline:** downloads the monthly AACT snapshot, cleans it, builds the structured features and BioBERT embeddings, and writes them to BigQuery.
-- **Training pipeline:** runs on Vertex AI Pipelines on a set schedule or when a new data version arrives. It trains the baseline and the neural network, evaluates them, and approves a model only if it passes the evaluation gate.
-- **Inference:** a FastAPI service on GKE takes a trial (NCT ID), returns the probability that it stops early, and gives a short explanation that cites similar past trials.
-- **Tests:** run with `pytest` from the repository root.
+## Component details (data acquisition and preprocessing)
 
-## Data pipeline
-
-Each step is a Python module run from the repository root. Every step logs to the console and to `logs/<step>.log`, and exits with code 1 if it fails, so an orchestrator can detect the failure.
+Each module can also be run on its own from the repository root. It logs to the console and to `logs/<step>.log`, and exits with code 1 if it fails.
 
 ### 1. Data acquisition
 
@@ -104,15 +144,15 @@ python -m src.features.build_text_sample --export-dir data/raw/aact/20261001 --n
 
 ### 3. Structured preprocessing and features
 
-`src/features/structured_features.py` cleans the structured fields and builds 151 features per trial: phase and study type, design (allocation, masking, purpose), arms, age range, gender, inclusion and exclusion counts, lead sponsor class and collaborators, sites and countries, intervention types, conditions and MeSH therapeutic areas.
+`src/features/structured_features.py` cleans the structured fields and builds 155 features per trial: phase and study type, design (allocation, masking, purpose), arms, age range, gender, inclusion and exclusion counts, lead sponsor class and collaborators, sites and countries, intervention types, conditions and MeSH therapeutic areas.
 
 ```bash
 python -m src.features.structured_features --export-dir data/raw/aact/20261001
 ```
 
 - **Label:** from `overall_status`: 1 for terminated, withdrawn or suspended, 0 for completed, and empty for trials still running (left out of training).
-- **Encoding:** categoricals are one-hot encoded against fixed category lists, so every snapshot gets the same columns, with `_other` and `_missing` columns. Numeric fields get a `_missing` flag and are filled with 0, so nothing is fitted on the full data.
-- **Leakage:** fields filled in after a trial ends are excluded: actual enrollment, completion dates, start date type, `why_stopped` and results. `n_facilities`, `has_us_facility`, `has_single_facility` and `n_countries` are kept but flagged as a leakage risk, because sites are often removed from withdrawn trials. Both lists are in the output's `.meta.json`.
+- **Encoding:** categoricals are one-hot encoded against fixed category lists, so every snapshot gets the same columns, with `_unlisted` (a value outside the list) and `_missing` columns. The catch-all is not called `_other` because several AACT fields have a real `OTHER` value. Numeric fields get a `_missing` flag and are filled with 0, so nothing is fitted on the full data.
+- **Leakage:** fields filled in after a trial ends are excluded: actual enrollment, completion dates, start date type, `why_stopped` and results. `n_facilities`, `has_us_facility`, `has_single_facility`, `n_countries` and the `_missing` flags of the facility columns are kept but flagged as a leakage risk, because sites are often removed from withdrawn trials. Both lists are in the output's `.meta.json`.
 
 Output: `data/processed/structured_features.csv`, with `nct_id`, `overall_status`, `label`, `start_date`, `study_first_submitted_date` and the features, and `structured_features.meta.json` with the feature list and label counts.
 
@@ -128,9 +168,17 @@ python -m src.features.biobert_test_run --sample data/processed/text_sample_10k.
 
 On an RTX 4060 laptop GPU the 10k sample takes about 2.7 minutes, so all finished trials take about 2 hours, and the full embedding is run locally on a GPU. On Windows, `requirements.txt` installs the CPU build of PyTorch; install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) to use a GPU.
 
-### Tests
 
-`pytest` from the repository root runs the unit tests for text cleaning, the eligibility split, the text table, the structured features, the embeddings (with a tiny local model, so no download is needed) and the AACT fetch.
+### 5. Bias detection and mitigation
+
+`src/bias/` slices the finished trials by phase, study type, sponsor class, region, therapeutic area, gender, age group and start era, flags groups that are too small or whose stopped rate is far from the overall rate, and reweights or resamples under-represented groups. In the pipeline it runs as the `bias` stage on the versioned snapshot; on its own it can also query the AACT database:
+
+```bash
+python -m src.bias.run_bias_detection --config configs/bias_config.yaml
+python -m src.bias.run_bias_mitigation --config configs/bias_config.yaml
+```
+
+Findings, the mitigation and its trade-offs are in [docs/bias_report.md](docs/bias_report.md). The analysis is at the data level; model-level evaluation per slice comes with the model development assignment.
 
 ## Team
 
