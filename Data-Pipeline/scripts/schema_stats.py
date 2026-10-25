@@ -23,6 +23,7 @@ later snapshots are validated against (scripts/validate.py):
     python -m scripts.schema_stats            # pipeline stage
     python -m scripts.schema_stats --freeze   # copy the current suite and
                                               # statistics to schema/baseline/
+                                              # (run_stage freeze, in GCS)
 """
 
 import argparse
@@ -262,8 +263,7 @@ def save_suite(suite, path):
 def freeze(reason=""):
     """Make the current suite and statistics the validation baseline."""
     if not (GENERATED_SUITE.exists() and STATS_JSON.exists()):
-        raise FileNotFoundError("run the schema_stats stage first "
-                                "(dvc repro schema_stats)")
+        raise FileNotFoundError("run the schema_stats stage first")
     BASELINE_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(GENERATED_SUITE, BASELINE_SUITE)
     shutil.copyfile(STATS_JSON, BASELINE_STATS)
@@ -286,7 +286,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--freeze", action="store_true",
                         help="copy the current suite and statistics to "
-                             "schema/baseline/ (then commit them to git)")
+                             "schema/baseline/ (run_stage freeze then "
+                             "stores them in GCS)")
     parser.add_argument("--reason", default="",
                         help="why this snapshot is the new baseline")
     args = parser.parse_args()
@@ -319,7 +320,7 @@ def main():
         if not BASELINE_SUITE.exists():
             logger.warning("no baseline schema yet: validation will use this "
                            "snapshot's schema. Freeze a trusted snapshot with "
-                           "`python -m scripts.schema_stats --freeze`")
+                           "`./gce/vm.sh freeze`")
 
 
 if __name__ == "__main__":

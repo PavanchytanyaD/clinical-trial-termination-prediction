@@ -7,22 +7,17 @@ data/processed/embeddings/:
   <field>.npy      (n_trials, 768) float16 array per text field (title,
                    brief_summary, detailed_description, inclusion, exclusion,
                    outcomes); empty text gives a zero vector
-  meta.json        model, fields, rows, windows per field, timing, backend
+  meta.json        model, fields, rows, windows per field, timing, job
 
 The embedding code is src/features/biobert_embeddings.py (Task 1):
 dmis-lab/biobert-base-cased-v1.2 used as is, long texts split into
-overlapping 512-token windows and averaged. params.yaml (section embeddings)
-picks where it runs:
-
-  backend: vertex  (default) a Vertex AI custom job on a T4 GPU runs this
-                   same module in worker mode in the GPU image
-                   (docker/Dockerfile.gpu); input and output pass through
-                   the GCS bucket, and the result comes back here so DVC
-                   versions it like every other output
-  backend: local   runs here (CUDA GPU if there is one, else CPU; needs
-                   torch and transformers from the root requirements.txt)
-
-max_trials caps the number of trials for a quick test (0 = all).
+overlapping 512-token windows and averaged. It runs as a Vertex AI custom job
+on a T4 GPU: this same module in worker mode, in the GPU image
+(docker/Dockerfile.gpu). Input and output pass through the GCS bucket, and
+the result comes back to the stage so DVC versions it like every other
+output. params.yaml (section embeddings) sets the machine, the model
+settings, and max_trials, which caps the number of trials for a quick test
+(0 = all).
 
     python -m scripts.embeddings                       # stage
     python -m scripts.embeddings --worker --input gs://... --output gs://...
@@ -52,7 +47,7 @@ EMB_DIR = PROCESSED_DIR / "embeddings"
 FIELDS = ["title", "brief_summary", "detailed_description", "inclusion",
           "exclusion", "outcomes"]
 DEFAULTS = {
-    "backend": "vertex", "max_trials": 0, "batch_size": 32,
+    "max_trials": 0, "batch_size": 32,
     "max_length": 512, "stride": 64,
     "model": "dmis-lab/biobert-base-cased-v1.2",
     "project": "ctt-mlops-project", "region": "us-central1",
@@ -131,18 +126,18 @@ def gcs_download(uri, path):
     _gcs().bucket(bucket).blob(name).download_to_filename(str(path))
 
 
-def gcs_upload_dir(local_dir, uri):
-    for p in sorted(Path(local_dir).iterdir()):
+def gcs_upload_dir(folder, uri):
+    for p in sorted(Path(folder).iterdir()):
         gcs_upload(p, f"{uri.rstrip('/')}/{p.name}")
 
 
-def gcs_download_dir(uri, local_dir):
+def gcs_download_dir(uri, folder):
     bucket, prefix = _split(uri)
     for blob in _gcs().list_blobs(bucket, prefix=prefix + "/"):
         name = blob.name[len(prefix) + 1:]
         if name:
-            Path(local_dir).mkdir(parents=True, exist_ok=True)
-            blob.download_to_filename(str(Path(local_dir) / name))
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(str(Path(folder) / name))
 
 
 # ---------------------------------------------------------------- Vertex AI
@@ -234,7 +229,7 @@ def run_on_vertex(p, run_name, poll_seconds=60):
         shutil.rmtree(EMB_DIR)
     gcs_download_dir(output_uri, EMB_DIR)
     meta = json.loads((EMB_DIR / "meta.json").read_text())
-    meta.update({"backend": "vertex", "vertex_job": job})
+    meta["vertex_job"] = job
     (EMB_DIR / "meta.json").write_text(json.dumps(meta, indent=2))
     return meta
 
@@ -244,9 +239,9 @@ def worker(input_uri, output_uri, settings):
     """Inside the Vertex AI job: GCS text in, GCS embeddings out."""
     p = {**DEFAULTS, **settings}
     with tempfile.TemporaryDirectory() as tmp:
-        local_in = Path(tmp) / "text_all.jsonl"
-        gcs_download(input_uri, local_in)
-        meta = embed_rows(read_texts(local_in, p["max_trials"]),
+        text_file = Path(tmp) / "text_all.jsonl"
+        gcs_download(input_uri, text_file)
+        meta = embed_rows(read_texts(text_file, p["max_trials"]),
                           Path(tmp) / "out", p)
         gcs_upload_dir(Path(tmp) / "out", output_uri)
     logger.info("uploaded %d embeddings to %s", meta["rows"], output_uri)
@@ -255,20 +250,9 @@ def worker(input_uri, output_uri, settings):
 def stage():
     with tracked_step("embeddings") as run:
         p = {**DEFAULTS, **load_params().get("embeddings", {})}
-        if p["backend"] == "local":
-            if EMB_DIR.exists():
-                shutil.rmtree(EMB_DIR)
-            meta = embed_rows(read_texts(TEXT_JSONL, p["max_trials"]),
-                              EMB_DIR, p)
-            meta["backend"] = "local"
-            (EMB_DIR / "meta.json").write_text(json.dumps(meta, indent=2))
-        elif p["backend"] == "vertex":
-            meta = run_on_vertex(
-                p, re.sub(r"[^a-z0-9-]+", "-", run["run_id"].lower()))
-        else:
-            raise ValueError("embeddings.backend must be vertex or local")
+        meta = run_on_vertex(
+            p, re.sub(r"[^a-z0-9-]+", "-", run["run_id"].lower()))
         run["metrics"].update({"rows": meta["rows"],
-                               "backend": meta["backend"],
                                **{f"seconds_{k}": v
                                   for k, v in meta["seconds"].items()}})
         run["outputs"]["data/processed/embeddings"] = fingerprint(EMB_DIR)

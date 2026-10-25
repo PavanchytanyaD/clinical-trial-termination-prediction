@@ -1,7 +1,7 @@
 """Paths and parameters shared by the pipeline steps.
 
 Every path is relative to the Data-Pipeline folder, so the steps work from
-any working directory, inside the Docker image and on a laptop.
+any working directory: in the Composer pods and in the VM's task folders.
 """
 
 import sys

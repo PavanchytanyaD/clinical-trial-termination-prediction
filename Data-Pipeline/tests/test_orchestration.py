@@ -180,18 +180,26 @@ def test_alert_failure_does_not_raise(monkeypatch):
 
 
 # ---------------------------------------------------------------- DAG
-def load_dag(runner, monkeypatch):
-    # "airflow" alone also matches the airflow/ compose folder here
+def dag_bag(runner, monkeypatch):
     pytest.importorskip("airflow.models")
     from airflow.models import DagBag
     monkeypatch.setenv("CTT_RUNNER", runner)
-    bag = DagBag(dag_folder=str(ROOT / "dags"), include_examples=False)
+    return DagBag(dag_folder=str(ROOT / "dags"), include_examples=False)
+
+
+def load_dag(runner, monkeypatch):
+    bag = dag_bag(runner, monkeypatch)
     assert bag.import_errors == {}
     return bag.get_dag("ctt_data_pipeline")
 
 
+def test_dag_runs_only_on_gcp_runners(monkeypatch):
+    errors = dag_bag("bare-metal", monkeypatch).import_errors
+    assert any("CTT_RUNNER must be k8s or vm" in e for e in errors.values())
+
+
 @pytest.mark.parametrize("runner, operator",
-                         [("local", "BashOperator"),
+                         [("vm", "BashOperator"),
                           ("k8s", "KubernetesPodOperator")])
 def test_dag_structure(runner, operator, monkeypatch):
     dag = load_dag(runner, monkeypatch)
@@ -221,15 +229,16 @@ def test_k8s_tasks_pass_params_as_separate_args(monkeypatch):
     env = {e.name: e.value for e in dag.get_task("validate").env_vars}
     assert env["PIPELINE_RUN_ID"] == "{{ run_id }}"
     assert env["PIPELINE_ORCHESTRATED"] == "1"
+    assert env["PIPELINE_STATE_URI"].startswith("gs://")
 
 
 # ---------------------------------------------------------------- dvc.lock
 def test_merge_lock_entry_keeps_other_stages():
     shared = yaml.safe_dump({"schema": "2.0", "stages": {
         "acquire": {"cmd": "a"}, "bias": {"cmd": "old"}}})
-    local = {"schema": "2.0", "stages": {"bias": {"cmd": "new"},
-                                         "acquire": {"cmd": "stale"}}}
-    merged = yaml.safe_load(run_stage.merge_lock_entry(shared, local, "bias"))
+    own = {"schema": "2.0", "stages": {"bias": {"cmd": "new"},
+                                       "acquire": {"cmd": "stale"}}}
+    merged = yaml.safe_load(run_stage.merge_lock_entry(shared, own, "bias"))
     assert merged["stages"] == {"acquire": {"cmd": "a"},
                                 "bias": {"cmd": "new"}}
 

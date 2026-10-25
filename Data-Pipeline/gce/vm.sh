@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run the data pipeline's Airflow on one Compute Engine VM, with the same
-# Docker Compose stack as on a laptop (Data-Pipeline/airflow/).
+# Run the data pipeline's Airflow on one Compute Engine VM: Docker Compose
+# Airflow (gce/airflow/), each task isolated by gce/run_task.sh.
 #
 #   ./gce/vm.sh create     create the VM; it installs Docker, clones the repo
 #                          and starts Airflow by itself (about 10 minutes)
@@ -9,7 +9,10 @@
 #   ./gce/vm.sh ui         open an SSH tunnel: Airflow at http://localhost:8081
 #   ./gce/vm.sh password   print the Airflow admin password stored on the VM
 #   ./gce/vm.sh trigger    start a run (SNAPSHOT=YYYYMMDD SOURCE=sample|zip|db)
-#   ./gce/vm.sh update     pull the latest code on the VM and restart Airflow
+#   ./gce/vm.sh freeze     make the latest run's schema and statistics the
+#                          validation baseline, in GCS (REASON="...")
+#   ./gce/vm.sh update     pull the latest code on the VM, refresh the boot
+#                          script and restart Airflow
 #   ./gce/vm.sh stop       stop the VM (compute billing stops, disk kept)
 #   ./gce/vm.sh start      start it again (Airflow comes back by itself)
 #   ./gce/vm.sh delete     delete the VM and its disk
@@ -48,7 +51,7 @@ if [ ! -d ${APP}/.git ]; then
   git clone --branch ${BRANCH} ${REPO_URL} ${APP}
   chown -R ctt:ctt ${APP}
 fi
-cd ${APP}/Data-Pipeline/airflow
+cd ${APP}/Data-Pipeline/gce/airflow
 if [ ! -f .env ]; then
   sed -e "s|^AIRFLOW_ADMIN_PASSWORD=.*|AIRFLOW_ADMIN_PASSWORD=\$(openssl rand -base64 12 | tr -d '/+=')|" \\
       -e "s|^AIRFLOW_UID=.*|AIRFLOW_UID=\$(id -u ctt)|" .env.example > .env
@@ -72,29 +75,34 @@ case "${1:-}" in
   status)
     gc compute instances describe "${VM}" --zone "${ZONE}" \
       --format="value(status,machineType.basename())"
-    on_vm "cd ${APP}/Data-Pipeline/airflow && sudo -u ctt docker compose ps --format 'table {{.Service}}\t{{.Status}}'"
+    on_vm "cd ${APP}/Data-Pipeline/gce/airflow && sudo -u ctt docker compose ps --format 'table {{.Service}}\t{{.Status}}'"
     ;;
   secrets)
     [ -f "${HERE}/.env" ] || { echo "no Data-Pipeline/.env to copy"; exit 1; }
     gc compute scp "${HERE}/.env" "${VM}:/tmp/pipeline.env" --zone "${ZONE}"
-    on_vm "sudo install -o ctt -g ctt -m 600 /tmp/pipeline.env ${APP}/Data-Pipeline/.env && rm /tmp/pipeline.env && cd ${APP}/Data-Pipeline/airflow && sudo -u ctt docker compose up -d"
+    on_vm "sudo install -o ctt -g ctt -m 600 /tmp/pipeline.env ${APP}/Data-Pipeline/.env && rm /tmp/pipeline.env && cd ${APP}/Data-Pipeline/gce/airflow && sudo -u ctt docker compose up -d"
     ;;
   ui)
     echo "Airflow UI: http://localhost:8081 (user admin; password: $0 password). Ctrl+C to close."
     gc compute ssh "${VM}" --zone "${ZONE}" --quiet -- -N -L 8081:localhost:8080
     ;;
   password)
-    on_vm "sudo grep ^AIRFLOW_ADMIN_PASSWORD= ${APP}/Data-Pipeline/airflow/.env | cut -d= -f2"
+    on_vm "sudo grep ^AIRFLOW_ADMIN_PASSWORD= ${APP}/Data-Pipeline/gce/airflow/.env | cut -d= -f2"
     ;;
   trigger)
     conf="{\"snapshot\": \"${SNAPSHOT:-$(date +%Y%m%d)}\", \"source\": \"${SOURCE:-sample}\", \"zip\": \"${ZIP:-}\"}"
-    on_vm "cd ${APP}/Data-Pipeline/airflow && sudo -u ctt docker compose exec -T scheduler airflow dags unpause ctt_data_pipeline && sudo -u ctt docker compose exec -T scheduler airflow dags trigger ctt_data_pipeline -c '${conf}'"
+    on_vm "cd ${APP}/Data-Pipeline/gce/airflow && sudo -u ctt docker compose exec -T scheduler airflow dags unpause ctt_data_pipeline && sudo -u ctt docker compose exec -T scheduler airflow dags trigger ctt_data_pipeline -c '${conf}'"
+    ;;
+  freeze)
+    on_vm "cd ${APP}/Data-Pipeline/gce/airflow && sudo -u ctt docker compose exec -T scheduler /opt/ctt/Data-Pipeline/gce/run_task.sh freeze --reason '${REASON:-trusted snapshot}'"
     ;;
   update)
-    on_vm "cd ${APP} && sudo -u ctt git pull --ff-only && cd Data-Pipeline/airflow && sudo -u ctt docker compose up -d --build"
+    gc compute instances add-metadata "${VM}" --zone "${ZONE}" \
+      --metadata-from-file startup-script=<(startup_script)
+    on_vm "cd ${APP} && sudo -u ctt git pull --ff-only && cd ${APP}/Data-Pipeline/gce/airflow && ([ -f .env ] || sudo cp ../../airflow/.env .env) && sudo -u ctt docker compose up -d --build --remove-orphans"
     ;;
   stop)   gc compute instances stop "${VM}" --zone "${ZONE}" ;;
   start)  gc compute instances start "${VM}" --zone "${ZONE}" ;;
   delete) gc compute instances delete "${VM}" --zone "${ZONE}" ;;
-  *) sed -n '2,20p' "$0"; exit 1 ;;
+  *) awk 'NR > 1 && /^#/ {print; next} NR > 1 {exit}' "$0"; exit 1 ;;
 esac

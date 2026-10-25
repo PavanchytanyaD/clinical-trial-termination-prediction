@@ -7,7 +7,7 @@ variable is not set (see .env.example):
     SMTP_STARTTLS (true), ALERT_EMAIL_FROM, ALERT_EMAIL_TO (comma separated)
 
 When SMTP is not configured the alert is logged and nothing is sent, so the
-pipeline still runs on a laptop without mail settings. Sending never raises:
+pipeline still runs without mail settings. Sending never raises:
 a broken mail server must not hide the original pipeline error.
 """
 

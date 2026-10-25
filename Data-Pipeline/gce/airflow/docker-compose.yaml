@@ -1,24 +1,21 @@
-# Local and GCP-VM Airflow for the data pipeline (LocalExecutor on Postgres).
+# Airflow for the data pipeline on the Compute Engine VM (LocalExecutor on
+# Postgres). gce/vm.sh creates the VM, writes .env from .env.example and runs
 #
-#   cd Data-Pipeline/airflow
-#   cp .env.example .env        # set AIRFLOW_ADMIN_PASSWORD (and, on a laptop,
-#                               # GCLOUD_CONFIG_DIR for the DVC remote)
 #   docker compose up -d --build
-#   open http://localhost:8080  # user "admin"
 #
-# The whole repository is mounted at /opt/ctt, so tasks run the checked-out
-# code and DVC writes data, dvc.lock and the cache in the repository, then
-# pushes to the GCS remote, exactly as on a laptop. Runs on the same machine
-# never overlap (max_active_runs=1 in the DAG).
+# The repository checkout is mounted read-only at /opt/ctt: the DAG comes from
+# there, and every task copies the code to a fresh folder (gce/run_task.sh),
+# so tasks are isolated as in a Composer pod. Data goes to the DVC remote and
+# the run state to GCS, using the VM's service account (pipeline-sa).
 
 x-airflow: &airflow
   build:
-    context: ../..
-    dockerfile: Data-Pipeline/airflow/Dockerfile
+    context: ../../..
+    dockerfile: Data-Pipeline/gce/airflow/Dockerfile
   image: ctt-data-pipeline-airflow:2.10.5
   user: "${AIRFLOW_UID:-50000}:0"
   env_file:
-    - path: ../.env           # pipeline secrets: AACT_*, SMTP_*, ALERT_*
+    - path: ../../.env        # pipeline secrets: AACT_*, SMTP_*, ALERT_*
       required: false
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -31,15 +28,8 @@ x-airflow: &airflow
     CTT_ALERT_EMAILS: ${CTT_ALERT_EMAILS:-}
     CTT_SOURCE: ${CTT_SOURCE:-sample}
     CTT_ZIP: ${CTT_ZIP:-}
-    # Laptop: Google client libraries (embeddings stage -> Vertex AI) use the
-    # mounted gcloud credentials. Empty on the VM: its service account.
-    GOOGLE_APPLICATION_CREDENTIALS: ${GCLOUD_CONFIG_DIR:+${GCLOUD_CONFIG_DIR}/application_default_credentials.json}
   volumes:
-    - ../..:/opt/ctt
-    # Laptop only: the gcloud folder whose credentials the DVC remote uses
-    # (.dvc/config.local credentialpath), mounted at the same path. On the
-    # GCP VM leave GCLOUD_CONFIG_DIR unset: the VM's service account is used.
-    - ${GCLOUD_CONFIG_DIR:-./no-gcloud}:${GCLOUD_CONFIG_DIR:-/opt/no-gcloud}:ro
+    - ../../..:/opt/ctt:ro
   depends_on:
     postgres:
       condition: service_healthy
@@ -68,7 +58,7 @@ services:
         airflow db migrate &&
         airflow users create --role Admin --username admin \
           --firstname Admin --lastname User --email admin@example.com \
-          --password "$${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in airflow/.env}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}" \
           || true
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -87,7 +77,7 @@ services:
   webserver:
     <<: *airflow
     command: webserver
-    # localhost only; on the VM reach it through an SSH tunnel
+    # bound to the VM's localhost; reach it through ./gce/vm.sh ui
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped

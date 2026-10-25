@@ -6,19 +6,23 @@ bucket). Airflow decides when and in what order stages run, retries them and
 alerts on failure. Running a stage through DVC means an unchanged stage is
 skipped and every output is versioned.
 
-Two modes:
-
-* local (PIPELINE_STATE_URI not set): runs ``dvc repro`` in this checkout.
-* cloud (PIPELINE_STATE_URI=gs://bucket/prefix): used in Cloud Composer, where
-  every task runs in a fresh pod. Before the stage, the run's params.yaml and
-  the latest dvc.lock are downloaded from the state folder and the stage's
-  inputs are pulled from the DVC remote; after it, the outputs are pushed and
-  dvc.lock is uploaded again. Logs and reports are uploaded even when the
-  stage fails, so a failed validation can be read.
+Every task starts from a fresh copy of the code (a Composer pod, or a
+temporary folder on the VM: gce/run_task.sh), so the run's shared state lives
+in GCS (PIPELINE_STATE_URI, default gs://ctt-mlops-project-data/data-pipeline/
+state). Before the stage, the run's params.yaml and the latest dvc.lock are
+downloaded from there and the stage's inputs are pulled from the DVC remote;
+after it, the outputs are pushed and dvc.lock is merged back. Logs and
+reports are uploaded even when the stage fails, so a failed validation can be
+read.
 
     python -m scripts.run_stage acquire --param acquire.snapshot=20261001
     python -m scripts.run_stage preprocess
     python -m scripts.run_stage publish      # push data, write version record
+    python -m scripts.run_stage freeze --reason "first real AACT snapshot"
+
+freeze makes the latest run's schema and statistics the validation baseline:
+it is stored in the state folder (state/baseline/), and every run downloads
+it before its stages, so validate always compares against it.
 """
 
 import argparse
@@ -35,7 +39,8 @@ from pathlib import Path
 
 import yaml
 
-from scripts.config import (DVC_FILE, LOCK_FILE, LOG_DIR, PARAMS_FILE, ROOT,
+from scripts.config import (BASELINE_DIR, DVC_FILE, LOCK_FILE, LOG_DIR,
+                            PARAMS_FILE, ROOT,
                             VALIDATION_SUMMARY, load_params)
 from scripts.tracking import run_id, setup_logging
 
@@ -43,6 +48,7 @@ logger = logging.getLogger("run_stage")
 
 PLACEHOLDER_REMOTE = "CHANGE-ME"
 UPLOAD_DIRS = ["logs", "reports"]
+DEFAULT_STATE_URI = "gs://ctt-mlops-project-data/data-pipeline/state"
 
 
 # ---------------------------------------------------------------- dvc.yaml
@@ -213,23 +219,37 @@ def write_if_generation(uri, text, generation):
     return True
 
 
-def merge_lock_entry(shared_text, local_lock, stage):
+def merge_lock_entry(shared_text, own_lock, stage):
     """The shared dvc.lock with this stage's entry replaced by ours."""
     shared = yaml.safe_load(shared_text or "") or {}
-    shared.setdefault("schema", local_lock.get("schema", "2.0"))
-    shared.setdefault("stages", {})[stage] = local_lock["stages"][stage]
+    shared.setdefault("schema", own_lock.get("schema", "2.0"))
+    shared.setdefault("stages", {})[stage] = own_lock["stages"][stage]
     return yaml.safe_dump(shared, sort_keys=False)
 
 
-def upload_tree(local_dir, uri):
-    local_dir = Path(local_dir)
-    for p in sorted(local_dir.rglob("*")):
+def download_tree(uri, folder):
+    """Download every object under uri/ into folder; False if none."""
+    bucket, prefix = _split(uri)
+    found = False
+    for blob in _gcs().list_blobs(bucket, prefix=prefix + "/"):
+        name = blob.name[len(prefix) + 1:]
+        if name:
+            target = Path(folder) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(str(target))
+            found = True
+    return found
+
+
+def upload_tree(folder, uri):
+    folder = Path(folder)
+    for p in sorted(folder.rglob("*")):
         if p.is_file():
-            upload(p, f"{uri}/{p.relative_to(local_dir).as_posix()}")
+            upload(p, f"{uri}/{p.relative_to(folder).as_posix()}")
 
 
 class State:
-    """The run's shared files in gs://.../state (cloud mode only)."""
+    """The run's shared files in gs://.../state."""
 
     def __init__(self, uri, rid):
         self.uri = uri.rstrip("/")
@@ -239,6 +259,8 @@ class State:
         download(f"{self.uri}/dvc.lock", LOCK_FILE)
         if not have_overrides:  # later tasks reuse the first task's params
             download(f"{self.run}/params.yaml", PARAMS_FILE)
+        if download_tree(f"{self.uri}/baseline", BASELINE_DIR):
+            logger.info("using the baseline in %s/baseline", self.uri)
 
     def push_params(self):
         upload(PARAMS_FILE, f"{self.run}/params.yaml")
@@ -251,14 +273,14 @@ class State:
         upload would let the last one overwrite the other's entry, so the
         write is conditional on the object's generation and retried.
         """
-        local = yaml.safe_load(LOCK_FILE.read_text()) if LOCK_FILE.exists() \
+        own = yaml.safe_load(LOCK_FILE.read_text()) if LOCK_FILE.exists() \
             else {}
-        if stage not in (local.get("stages") or {}):
+        if stage not in (own.get("stages") or {}):
             return
         uri = f"{self.uri}/dvc.lock"
         for _ in range(attempts):
             shared, generation = read_versioned(uri)
-            merged = merge_lock_entry(shared, local, stage)
+            merged = merge_lock_entry(shared, own, stage)
             if write_if_generation(uri, merged, generation):
                 LOCK_FILE.write_text(merged)
                 upload(LOCK_FILE, f"{self.run}/dvc.lock")
@@ -274,39 +296,38 @@ class State:
 
 
 # ---------------------------------------------------------------- stages
+def open_state():
+    """The run's GCS state; fails early without a real DVC remote."""
+    if not remote_url():
+        raise RuntimeError("no DVC remote configured; see README 'DVC remote'")
+    uri = os.environ.get("PIPELINE_STATE_URI") or DEFAULT_STATE_URI
+    return State(uri, run_id())
+
+
 def run_stage(stage, overrides=()):
     if stage not in stages():
         raise ValueError(f"unknown stage {stage!r}; stages: {list(stages())}")
-    state_uri = os.environ.get("PIPELINE_STATE_URI")
-    state = State(state_uri, run_id()) if state_uri else None
-    remote = remote_url()
-    if state:
-        if not remote:
-            raise RuntimeError("cloud mode needs a real DVC remote; see "
-                               "README 'DVC remote'")
-        state.pull(bool(overrides))
+    state = open_state()
+    state.pull(bool(overrides))
     set_params(overrides)
-    if state and overrides:
+    if overrides:
         state.push_params()
 
-    if remote:
-        upstream = produced_by()
-        for dep in stage_deps(stage):
-            if upstream.get(dep, stage) != stage:
-                # missing data is reported by repro below
-                dvc("pull", dep, check=False)
+    upstream = produced_by()
+    for dep in stage_deps(stage):
+        if upstream.get(dep, stage) != stage:
+            # missing data is reported by repro below
+            dvc("pull", dep, check=False)
     rc = 1
     try:
         # --pull: an unchanged stage restores its outputs from the remote
         # instead of running again
-        rc = dvc("repro", "--single-item", *(["--pull"] if remote else []),
-                 stage, check=False)
-        if rc == 0 and state:
+        rc = dvc("repro", "--single-item", "--pull", stage, check=False)
+        if rc == 0:
             dvc("push", stage)
             state.push_lock(stage)
     finally:
-        if state:
-            state.push_artifacts(stage)
+        state.push_artifacts(stage)
     if rc != 0:
         raise RuntimeError(f"stage {stage} failed (dvc repro exit {rc}); "
                            f"see {LOG_DIR / (stage + '.log')}")
@@ -334,19 +355,11 @@ def version_record():
 
 def publish():
     """Push every output to the DVC remote and record the data version."""
-    state_uri = os.environ.get("PIPELINE_STATE_URI")
-    state = State(state_uri, run_id()) if state_uri else None
-    if state:
-        state.pull(False)
-    remote = remote_url()
-    if remote:
-        if state:
-            for path in produced_by():
-                dvc("pull", path, check=False)
-        dvc("push")
-    else:
-        logger.warning("no DVC remote configured: data stays in the local "
-                       "DVC cache only")
+    state = open_state()
+    state.pull(False)
+    for path in produced_by():
+        dvc("pull", path, check=False)
+    dvc("push")
     record = version_record()
     versions = LOG_DIR / "versions"
     versions.mkdir(parents=True, exist_ok=True)
@@ -355,31 +368,44 @@ def publish():
     logger.info("data version %s: %d outputs, validation %s", path.name,
                 len(record["outputs"]),
                 (record["validation"] or {}).get("success"))
-    if state:
-        base = f"{state.uri}/versions/{record['snapshot']}"
-        upload(path, f"{base}/{record['run_id']}.json")
-        upload(LOCK_FILE, f"{base}/dvc.lock")
-        upload(LOCK_FILE, f"{base}/latest.dvc.lock")
-    else:
-        logger.info("commit the new data version: git add Data-Pipeline/"
-                    "dvc.lock && git commit -m 'Data snapshot %s'",
-                    record["snapshot"])
+    base = f"{state.uri}/versions/{record['snapshot']}"
+    upload(path, f"{base}/{record['run_id']}.json")
+    upload(LOCK_FILE, f"{base}/dvc.lock")
+    upload(LOCK_FILE, f"{base}/latest.dvc.lock")
     return record
+
+
+def freeze(reason):
+    """Make the latest schema and statistics the baseline, in GCS."""
+    from scripts.schema_stats import freeze as freeze_files
+    state = open_state()
+    state.pull(False)
+    for out in ("schema/generated/expectation_suite.json",
+                "reports/statistics/statistics.json"):
+        dvc("pull", out)
+    info = freeze_files(reason)
+    upload_tree(BASELINE_DIR, f"{state.uri}/baseline")
+    return info
 
 
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("stage", help="a stage in dvc.yaml, or publish")
+    parser.add_argument("stage",
+                        help="a stage in dvc.yaml, publish, or freeze")
     parser.add_argument("--param", action="append", default=[],
                         help="override params.yaml, e.g. "
                              "acquire.snapshot=20261001 (repeatable)")
+    parser.add_argument("--reason", default="",
+                        help="freeze: why this snapshot is the baseline")
     args = parser.parse_args()
     setup_logging(f"run_stage_{args.stage}")
     try:
         if args.stage == "publish":
             publish()
+        elif args.stage == "freeze":
+            freeze(args.reason)
         else:
             run_stage(args.stage, args.param)
     except Exception:

@@ -45,10 +45,8 @@ validate:
   max_mean_shift_std: 0.5     # numeric mean shift, in baseline std units
 
 embeddings:
-  # vertex: Vertex AI custom job on a T4 GPU (image biobert-gpu, built with
-  #         ./composer/deploy.sh gpu-image); the result comes back here
-  # local:  this machine (needs torch + transformers, root requirements.txt)
-  backend: vertex
+  # Vertex AI custom job on a T4 GPU (image biobert-gpu, built with
+  # ./composer/deploy.sh gpu-image); the result comes back to the stage
   max_trials: 0               # embed only the first N trials (0 = all)
   model: dmis-lab/biobert-base-cased-v1.2
   batch_size: 32

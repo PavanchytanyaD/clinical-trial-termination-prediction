@@ -1,7 +1,8 @@
-"""Build a cleaned per-trial text table from a local AACT flat-file export.
+"""Build a cleaned per-trial text table from an AACT flat-file export.
 
-By default samples trials that have finished (completed or stopped early),
-for the BioBERT test run. With --all, cleans every trial in the export.
+The pipeline's text stage calls build_sample(..., all_trials=True), which
+cleans every trial. By default the command line samples trials that have
+finished (completed or stopped early); --all cleans every trial.
 
     python -m src.features.build_text_sample --export-dir <dir> --n 10000
     python -m src.features.build_text_sample --export-dir <dir> --all \\

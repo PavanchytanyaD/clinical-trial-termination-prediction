@@ -1,4 +1,4 @@
-# Pipeline steps (run by DVC locally and in the Composer pods).
+# Pipeline steps (in the Composer pods and in the VM's Airflow container).
 # Python 3.11 or later, same as the repository's requirements.txt.
 numpy==2.3.3
 pandas==3.0.1

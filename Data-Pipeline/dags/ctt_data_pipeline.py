@@ -18,18 +18,27 @@ run; see docs/pipeline_optimization.md.
 fails the task and stops the run before `publish` records a bad data
 version.
 
-Configuration (environment variables of the Composer environment):
+It runs on Google Cloud in one of two places, picked by CTT_RUNNER:
 
-  CTT_RUNNER        k8s (Cloud Composer, default) or local
+  k8s  Cloud Composer: each task is a pod running the pipeline image
+       (docker/Dockerfile)
+  vm   the Compute Engine VM (gce/): each task runs gce/run_task.sh, which
+       copies the code to a fresh folder, so tasks are isolated as in a pod
+
+Either way the run's shared state is in GCS and the data in the DVC remote.
+
+Configuration (environment variables):
+
+  CTT_RUNNER        k8s (default) or vm
   CTT_IMAGE         pipeline image in Artifact Registry (k8s runner)
-  CTT_STATE_URI     gs://<bucket>/data-pipeline/state, shared run state
+  CTT_STATE_URI     shared run state (default gs://ctt-mlops-project-data/
+                    data-pipeline/state)
   CTT_ALERT_EMAILS  comma-separated failure-email recipients
   CTT_SOURCE        default acquire.source (sample, zip or db)
   CTT_ZIP           default acquire.zip, for source zip
   CTT_SMTP_SECRET   Kubernetes secret with SMTP_* / ALERT_* / AACT_* keys
   CTT_NAMESPACE     pod namespace (Composer 3: composer-user-workloads)
-  CTT_PIPELINE_HOME Data-Pipeline folder (local runner)
-  CTT_PYTHON        python with requirements.txt installed (local runner)
+  CTT_REPO          repository checkout on the VM (vm runner)
 
 Trigger with a config to pick the snapshot or source for one run:
     {"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}
@@ -51,18 +60,21 @@ except ImportError:  # Airflow 2
 log = logging.getLogger(__name__)
 
 RUNNER = os.environ.get("CTT_RUNNER", "k8s")
+if RUNNER not in ("k8s", "vm"):
+    raise ValueError(f"CTT_RUNNER must be k8s or vm, got {RUNNER!r}")
 IMAGE = os.environ.get(
     "CTT_IMAGE",
     "us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest")
-STATE_URI = os.environ.get("CTT_STATE_URI", "")
+STATE_URI = os.environ.get("CTT_STATE_URI",
+                           "gs://ctt-mlops-project-data/data-pipeline/state")
 ALERT_EMAILS = [e.strip() for e in
                 os.environ.get("CTT_ALERT_EMAILS", "").split(",") if e.strip()]
 NAMESPACE = os.environ.get("CTT_NAMESPACE", "composer-user-workloads")
 SMTP_SECRET = os.environ.get("CTT_SMTP_SECRET", "")
-PIPELINE_HOME = os.environ.get(
-    "CTT_PIPELINE_HOME",
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PYTHON = os.environ.get("CTT_PYTHON", "python")
+REPO = os.environ.get(
+    "CTT_REPO",
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+        __file__)))))
 
 # Per-run parameters: trigger config first, then environment defaults.
 # Templates use double quotes only, so shell-quoting them keeps them intact.
@@ -83,13 +95,11 @@ def log_failure(context):
 
 
 def step_env():
-    env = {"PIPELINE_RUN_ID": "{{ run_id }}",
-           # Airflow sends its own failure email; steps only email
-           # validation results
-           "PIPELINE_ORCHESTRATED": "1"}
-    if STATE_URI:
-        env["PIPELINE_STATE_URI"] = STATE_URI
-    return env
+    return {"PIPELINE_RUN_ID": "{{ run_id }}",
+            "PIPELINE_STATE_URI": STATE_URI,
+            # Airflow sends its own failure email; steps only email
+            # validation results
+            "PIPELINE_ORCHESTRATED": "1"}
 
 
 def step(stage, params=None, timeout=timedelta(hours=2)):
@@ -101,9 +111,11 @@ def step(stage, params=None, timeout=timedelta(hours=2)):
     args = [stage]
     for key, value in (params or {}).items():
         args += ["--param", f"{key}={value}"]
-    if RUNNER == "local":
-        cmd = " ".join(["cd", shlex.quote(PIPELINE_HOME), "&&", PYTHON, "-m",
-                        "scripts.run_stage", *map(shlex.quote, args)])
+    if RUNNER == "vm":
+        script = os.path.join(REPO, "Data-Pipeline", "gce", "run_task.sh")
+        # trailing space: Airflow would otherwise read a command ending in
+        # .sh as a Jinja template file
+        cmd = " ".join([shlex.quote(script), *map(shlex.quote, args)]) + " "
         return BashOperator(task_id=stage, bash_command=cmd, env=step_env(),
                             append_env=True, execution_timeout=timeout)
 

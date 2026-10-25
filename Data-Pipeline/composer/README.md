@@ -1,8 +1,9 @@
 # Deploying to Cloud Composer
 
-The DAG runs on Cloud Composer 3 in the `ctt-mlops` project (project ID `ctt-mlops-project`). Each task runs
-the pipeline image in a Kubernetes pod, so Composer itself needs no extra
-Python packages.
+The DAG runs on Cloud Composer 3 in the `ctt-mlops` project (project ID
+`ctt-mlops-project`). Each task runs the pipeline image in a Kubernetes pod,
+so Composer itself needs no extra Python packages. Everyday runs use the
+Compute Engine VM instead (`../gce/`); both share the same bucket.
 
 **Cost:** a Composer environment is billed every hour it exists, even when no
 DAG runs, and even the small size uses a large share of the course credits
@@ -15,7 +16,8 @@ the environment again takes about 25 minutes.
 - `gcloud` logged in with an account that can use `ctt-mlops-project` (Composer,
   Cloud Build, Artifact Registry and Storage admin roles), and
   `gcloud config set project ctt-mlops-project`.
-- A GCS bucket for the DVC data and the run state (`BUCKET`).
+- The bucket `gs://ctt-mlops-project-data` for the DVC data and the run
+  state (`./composer/deploy.sh bucket` creates it if missing).
 - The environment's service account needs `roles/storage.objectAdmin` on that
   bucket, so the pods can read and write data.
 
@@ -24,9 +26,8 @@ the environment again takes about 25 minutes.
 From the `Data-Pipeline` folder:
 
 ```bash
-export BUCKET=<bucket> ALERT_EMAILS=<a@x.com,b@y.com>
+export ALERT_EMAILS=<a@x.com,b@y.com>
 ./composer/deploy.sh bucket    # create the bucket if needed
-dvc remote modify gcs url gs://$BUCKET/dvc-store   # then commit .dvc/config
 ./composer/deploy.sh image     # Cloud Build -> Artifact Registry
 ./composer/deploy.sh gpu-image # BioBERT image for the Vertex AI embeddings job
 ./composer/deploy.sh env       # create the environment (about 25 minutes)
@@ -48,7 +49,7 @@ runs in the normal pipeline pod.
 |---|---|
 | `CTT_RUNNER` | `k8s` |
 | `CTT_IMAGE` | `us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest` |
-| `CTT_STATE_URI` | `gs://<bucket>/data-pipeline/state` |
+| `CTT_STATE_URI` | `gs://ctt-mlops-project-data/data-pipeline/state` |
 | `CTT_ALERT_EMAILS` | failure-email recipients |
 | `CTT_SMTP_SECRET` | `ctt-pipeline-secrets` (SMTP / ALERT / AACT keys) |
 | `CTT_SOURCE` | default `acquire.source`: `sample`, `zip` or `db` |
@@ -60,10 +61,11 @@ validation alerts sent from the pods still work, through the SMTP secret.
 ## What ends up in the bucket
 
 ```
-gs://<bucket>/
+gs://ctt-mlops-project-data/
 |- dvc-store/                       DVC remote: every data version
 |- data-pipeline/state/
    |- dvc.lock                      latest successful stage outputs
+   |- baseline/                     validation baseline (./gce/vm.sh freeze)
    |- runs/<run_id>/params.yaml     parameters of that run
    |- runs/<run_id>/<stage>/logs/   step logs and run records
    |- runs/<run_id>/<stage>/reports/  statistics and validation reports
@@ -71,9 +73,5 @@ gs://<bucket>/
    |- versions/<snapshot>/<run_id>.json
 ```
 
-To bring a Composer data version into git:
-
-```bash
-gcloud storage cp gs://$BUCKET/data-pipeline/state/versions/<snapshot>/dvc.lock dvc.lock
-dvc pull && git add dvc.lock && git commit -m "Data snapshot <snapshot>"
-```
+The VM's runs write to the same folders, so a run on either host continues
+from the latest data versions of both.

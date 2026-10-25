@@ -8,7 +8,7 @@ Reads the per-trial slice table from bias detection, boosts small groups
   mitigation_summary.json      what changed, for the report and alerts
 
 run(config) is the function the Airflow DAG calls.
-Run locally with:  python -m src.bias.run_bias_mitigation --config configs/bias_config.yaml
+Run on its own with:  python -m src.bias.run_bias_mitigation --config configs/bias_config.yaml
 """
 
 from __future__ import annotations

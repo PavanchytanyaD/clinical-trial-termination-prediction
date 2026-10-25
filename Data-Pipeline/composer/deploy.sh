@@ -3,7 +3,7 @@
 # (project ID ctt-mlops-project).
 # Read composer/README.md first; every step is safe to re-run.
 #
-#   BUCKET=<gcs bucket> ALERT_EMAILS=a@x.com,b@y.com ./composer/deploy.sh <step>
+#   ALERT_EMAILS=a@x.com,b@y.com ./composer/deploy.sh <step>
 #
 # Steps (run in this order the first time):
 #   bucket     create the data bucket (DVC remote + run state), if missing
@@ -41,7 +41,7 @@ cloud_build() {
       >/dev/null 2>&1 \
     || gc artifacts repositories create "${REPO}" --location "${REGION}" \
          --repository-format docker
-  local config
+  # build config, removed after the build
   config="$(mktemp)"
   cat > "${config}" <<EOF
 steps:
@@ -65,7 +65,6 @@ case "${1:-}" in
     gc storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 \
       || gc storage buckets create "gs://${BUCKET}" --location "${REGION}" \
            --uniform-bucket-level-access
-    echo "DVC remote: cd Data-Pipeline && dvc remote modify gcs url gs://${BUCKET}/dvc-store"
     ;;
   image)
     cloud_build Dockerfile "${IMAGE}"

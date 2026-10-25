@@ -1,8 +1,7 @@
-# Data pipeline stages. `dvc repro` runs the whole pipeline (no Airflow
-# needed) and skips stages whose code, inputs and params did not change.
-# The Airflow DAG (dags/ctt_data_pipeline.py) runs the same stages one task
-# each, through scripts/run_stage.py. dvc.lock records the md5 of every
-# output; `dvc push` stores the data itself in the GCS remote.
+# Data pipeline stages. The Airflow DAG (dags/ctt_data_pipeline.py) runs
+# them one task each, through scripts/run_stage.py, which skips a stage whose
+# code, inputs and params did not change. dvc.lock records the md5 of every
+# output; the data itself goes to the GCS remote.
 #
 # Paths starting with ../ are the team's shared code in src/ and configs/ at
 # the repository root: changing that code re-runs the stages that use it.

@@ -8,7 +8,7 @@ ties every part of the data pipeline assignment together:
 | 1. Data acquisition | `scripts/acquire.py` calls `../src/ingestion/fetch_aact.py` |
 | 2. Data preprocessing | `scripts/preprocess.py` calls `../src/features/structured_features.py` |
 | 3. Test modules | `tests/` here and `../tests/` |
-| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`; Airflow in Docker (`airflow/`) on a laptop or a GCP VM (`gce/`), or on Cloud Composer (`composer/`) |
+| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`, on a Compute Engine VM (`gce/`) or Cloud Composer (`composer/`) |
 | 5. Data versioning with DVC | `dvc.yaml`, `dvc.lock`, `.dvc/config` (GCS remote) |
 | 6. Tracking and logging | `scripts/tracking.py`, `scripts/alerts.py` |
 | 7. Data schema and statistics generation | `scripts/schema_stats.py`, `scripts/validate.py`, `schema/` |
@@ -18,29 +18,34 @@ ties every part of the data pipeline assignment together:
 | BioBERT text embeddings | `scripts/text.py`, `scripts/embeddings.py` call `../src/features/`; GPU job on Vertex AI |
 
 The stages call the team's shared code in `../src/` (ingestion, features,
-bias, error handling). Without an AACT account, `acquire` writes a seeded
-placeholder snapshot in the AACT format, so the whole pipeline runs end to
-end anywhere.
+bias, error handling). Everything runs on Google Cloud (project
+`ctt-mlops-project`): Airflow on a Compute Engine VM or Cloud Composer, data
+versions in the GCS bucket `gs://ctt-mlops-project-data`, images in Artifact
+Registry, and BioBERT on a Vertex AI GPU. Without AACT credentials, `acquire`
+writes a seeded test snapshot in the AACT format, so the whole pipeline can
+still be exercised end to end.
 
 ## How it fits together
 
 ```
-     Airflow (Docker on a laptop or GCP VM, or Cloud Composer)
+     Airflow (Compute Engine VM, or Cloud Composer)
                        |  schedule, order, retries, failure email
                +--> preprocess --+--> schema_stats --> validate --+
                |                 +--> anomalies -------------------+
     acquire ---+--> bias ------------------------------------------+--> publish
                +--> text --> embeddings (Vertex AI T4 GPU job) ----+
                        |
-             each task = one DVC stage (scripts/run_stage.py)
+   each task = one DVC stage (scripts/run_stage.py) in a fresh copy of
+   the code: a pod on Composer, a temporary folder on the VM
                        |
         DVC: tracks inputs, params and outputs (dvc.lock),
-             skips unchanged stages, stores every data version in GCS
+             skips unchanged stages, stores every data version in GCS;
+        run state (params, dvc.lock, logs, reports, baseline) in GCS too
 ```
 
 | Stage | What it does | Output |
 |---|---|---|
-| `acquire` | Writes one AACT snapshot (12 tables). Source `sample` (placeholder), `zip` or `db` (calls `src/ingestion/fetch_aact.py`) | `data/raw/aact_snapshot/` |
+| `acquire` | Writes one AACT snapshot (12 tables). Source `db` (AACT cloud PostgreSQL) or `zip` (monthly export) via `src/ingestion/fetch_aact.py`, or `sample` (seeded test data) | `data/raw/aact_snapshot/` |
 | `preprocess` | One row per trial with the label and features. Calls `src/features/structured_features.py` when present, else a placeholder | `data/processed/structured_features.csv` |
 | `bias` | Slices the finished trials (phase, sponsor, region, area, gender, age group, era), flags under-represented groups and rate gaps, reweights them (`src/bias/`) | `reports/bias/`, `data/processed/trial_slices.csv` |
 | `schema_stats` | Per-column statistics, and a Great Expectations suite (the schema) inferred from the snapshot | `reports/statistics/`, `schema/generated/` |
@@ -54,18 +59,18 @@ end anywhere.
 
 ```
 Data-Pipeline/
-|- dags/ctt_data_pipeline.py   Airflow DAG (Cloud Composer, or local for testing)
+|- dags/ctt_data_pipeline.py   Airflow DAG (Composer pods or the VM)
 |- scripts/                    pipeline steps, run as python -m scripts.<step>
 |  |- acquire.py               stage 1 adapter (ingestion code or placeholder)
-|  |- sample_snapshot.py       placeholder AACT snapshot generator
+|  |- sample_snapshot.py       seeded test snapshot in the AACT format
 |  |- preprocess.py            stage 2 adapter (feature code or placeholder)
 |  |- bias.py                  bias detection and mitigation on the snapshot
 |  |- text.py                  cleaned trial text (BioBERT input)
-|  |- embeddings.py            BioBERT embeddings (Vertex AI GPU or local)
+|  |- embeddings.py            BioBERT embeddings (Vertex AI GPU job)
 |  |- schema_stats.py          statistics + Great Expectations schema
 |  |- anomalies.py             anomaly detection + alerts
 |  |- validate.py              schema validation + drift checks + alerts
-|  |- run_stage.py             runs one DVC stage (what each Airflow task does)
+|  |- run_stage.py             runs one DVC stage with its state in GCS (each task)
 |  |- tracking.py              logging and per-step run records (+ MLflow)
 |  |- alerts.py                SMTP email alerts
 |  |- config.py                paths and params
@@ -74,87 +79,66 @@ Data-Pipeline/
 |- docs/                       pipeline optimization note and Gantt charts
 |- docker/Dockerfile           image the Composer tasks run
 |- docker/Dockerfile.gpu       BioBERT image the Vertex AI GPU job runs
-|- airflow/                    Airflow in Docker Compose (laptop and GCP VM)
-|- gce/vm.sh                   the same Airflow on a Compute Engine VM
+|- gce/                        Airflow on a Compute Engine VM
+|  |- vm.sh                    create, update, trigger, stop the VM
+|  |- run_task.sh              one task in a fresh copy of the code
+|  |- airflow/                 Docker Compose stack the VM runs
 |- composer/                   Cloud Composer deployment (deploy.sh, README)
 |- dvc.yaml, params.yaml       DVC stages and their parameters
 |- dvc.lock                    hash of every output: the current data version
 |- requirements.txt, .env.example
 ```
 
-`data/`, `reports/`, `schema/generated/` and `logs/` are produced by the
-pipeline and are not committed: DVC stores the data, git stores `dvc.lock`.
+`data/`, `reports/`, `schema/generated/` and `logs/` are produced inside each
+task and never committed: DVC stores the data in the GCS remote, and the run
+state folder in GCS keeps the logs, reports and the latest `dvc.lock`.
 
-## Setup
+## Run it on Google Cloud
 
-Python 3.11 or later, from the repository root:
-
-```bash
-cd Data-Pipeline
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env    # optional: SMTP settings for email alerts
-```
-
-## Run the pipeline locally (no Airflow needed)
-
-```bash
-dvc repro            # runs every stage that changed
-dvc repro validate   # or up to one stage
-dvc dag              # shows the stage graph
-dvc metrics show     # validation summary
-```
-
-`dvc repro` with nothing changed does nothing ("Data and pipelines are up to
-date"). Change a parameter in `params.yaml` (for example `acquire.snapshot`)
-and only the affected stages run again.
-
-To use real AACT data instead of the placeholder snapshot, set
-`acquire.source` to `zip` (with `acquire.zip` set to the export's path or URL)
-or to `db` (with `AACT_USER` and `AACT_PASSWORD` in the environment). Both
-need `src/ingestion/fetch_aact.py` in the checkout.
-
-## Where it runs
-
-The same DAG and the same DVC stages run in three places; all of them push
-data versions to the same GCS remote (`gs://ctt-mlops-project-data`).
-
-| | How | Cost |
+| | Where | Use |
 |---|---|---|
-| Laptop, no Airflow | `dvc repro` (above) | free |
-| Laptop, Airflow in Docker | `airflow/docker-compose.yaml` | free |
-| GCP VM, Airflow in Docker | `gce/vm.sh` (same compose stack on Compute Engine) | e2-standard-4 while running |
-| Cloud Composer 3 | `composer/deploy.sh` | billed per hour while the environment exists |
+| Airflow | Compute Engine VM `ctt-airflow` (`gce/`) | everyday runs; stop it when idle |
+| Airflow | Cloud Composer 3 (`composer/`) | demo runs; delete it afterwards (billed per hour) |
+| Data versions | `gs://ctt-mlops-project-data/dvc-store` (DVC remote) | every output of every run |
+| Run state | `gs://ctt-mlops-project-data/data-pipeline/state` | params, `dvc.lock`, logs, reports, baseline, version records |
+| Images | Artifact Registry `ctt-images` | `data-pipeline` (Composer pods), `biobert-gpu` (Vertex AI) |
+| BioBERT | Vertex AI custom job, `n1-standard-8` + T4 | the `embeddings` stage |
 
-The `embeddings` stage starts a Vertex AI GPU job from any of them.
+Both Airflow hosts run the same DAG and the same stages, as the service
+account `pipeline-sa`, and share the bucket, so a run on one continues from
+the data versions of the other.
 
-**Airflow in Docker on a laptop** (needs Docker Desktop):
+**One-time setup** (a Google account with access to `ctt-mlops-project`):
 
 ```bash
-cd Data-Pipeline/airflow
-cp .env.example .env    # set AIRFLOW_ADMIN_PASSWORD; GCLOUD_CONFIG_DIR for GCS/Vertex
-docker compose up -d --build
-open http://localhost:8080   # user admin
+gcloud auth login && gcloud config set project ctt-mlops-project
+./composer/deploy.sh image       # pipeline image (Composer pods)
+./composer/deploy.sh gpu-image   # BioBERT image (Vertex AI)
 ```
 
-The repository is mounted into the containers, so tasks run the checked-out
-code and write `dvc.lock` and the data here. `GCLOUD_CONFIG_DIR` is the
-gcloud folder whose application-default credentials reach the bucket and
-Vertex AI (`gcloud auth application-default login`).
-
-**The same stack on a GCP VM** (runs as `pipeline-sa`, no keys):
+**Airflow on the VM:**
 
 ```bash
-export CLOUDSDK_CONFIG=~/.config/gcloud-ctt   # the ctt-mlops gcloud login
 ./gce/vm.sh create     # once; Airflow is up after about 10 minutes
 ./gce/vm.sh secrets    # copies Data-Pipeline/.env (AACT_*, SMTP_*) to the VM
-./gce/vm.sh ui         # Airflow at http://localhost:8081; ./gce/vm.sh password
+./gce/vm.sh ui         # Airflow at http://localhost:8081 over SSH; ./gce/vm.sh password
 ./gce/vm.sh trigger    # or SOURCE=db SNAPSHOT=20261101 ./gce/vm.sh trigger
-./gce/vm.sh update     # pull the latest code on the VM
+./gce/vm.sh update     # after pushing new code
 ./gce/vm.sh stop       # stop paying for the VM when idle
 ```
 
-**Cloud Composer**: see [composer/README.md](composer/README.md).
+The VM's Airflow runs in Docker Compose (`gce/airflow/`), with the repository
+mounted read-only. Each task runs `gce/run_task.sh`, which copies the code to
+a fresh folder and runs the stage there, so parallel tasks never share files,
+the same as pods on Composer.
+
+**Cloud Composer:** see [composer/README.md](composer/README.md).
+
+**Real AACT data:** put `AACT_USER` and `AACT_PASSWORD` in
+`Data-Pipeline/.env` (from `.env.example`), copy them with
+`./gce/vm.sh secrets` (or `./composer/deploy.sh secret`), and trigger with
+`SOURCE=db`. `SOURCE=zip ZIP=gs://...` reads a monthly export from the bucket
+instead.
 
 ## BioBERT embeddings (Vertex AI)
 
@@ -165,22 +149,13 @@ averaged). Output in `data/processed/embeddings/`: `ids.txt` (row order),
 one `<field>.npy` float16 array per field and `meta.json`. DVC versions it
 like every other output and skips the stage when the text did not change.
 
-`params.yaml` `embeddings.backend` picks where it runs:
-
-- `vertex` (default): `scripts/embeddings.py` uploads the text to the
-  bucket, starts a Vertex AI custom job on an `n1-standard-8` with one T4
-  GPU running the image `biobert-gpu` (`docker/Dockerfile.gpu`, model
-  weights included), waits for it, and downloads the result. If the task is
-  stopped or times out, the job is cancelled. Build the image once with
-  `./composer/deploy.sh gpu-image`.
-- `local`: runs on this machine (GPU if there is one, else CPU); needs
-  `torch` and `transformers` from the root `requirements.txt`. Set
-  `max_trials` to embed only the first N trials for a quick test.
-
-```bash
-dvc repro embeddings    # with backend vertex: a GPU job on Vertex AI
-# quick local test: set backend: local and max_trials: 50, then the same
-```
+`scripts/embeddings.py` uploads the text to the bucket, starts a Vertex AI
+custom job on an `n1-standard-8` with one T4 GPU running the image
+`biobert-gpu` (`docker/Dockerfile.gpu`, model weights included), waits for
+it, and downloads the result. If the task is stopped or times out, the job
+is cancelled, so no GPU is left running. `params.yaml` (section
+`embeddings`) sets the machine and model settings; `max_trials` embeds only
+the first N trials for a quick test.
 
 ## 4. Pipeline orchestration (Airflow)
 
@@ -191,70 +166,55 @@ dvc repro embeddings    # with backend vertex: a GPU job on Vertex AI
   `validate`, then `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
   triggered by hand with a config such as
   `{"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}`.
-- Every task runs one DVC stage with `python -m scripts.run_stage <stage>`.
-  On Cloud Composer each task is a `KubernetesPodOperator` that runs the
-  pipeline image (`docker/Dockerfile`), so the pipeline's libraries never
-  clash with Composer's own Airflow packages. `CTT_RUNNER=local` runs the
-  same tasks as `BashOperator`s, for testing on a laptop.
+- Every task runs one DVC stage with `python -m scripts.run_stage <stage>`
+  in a fresh copy of the code. On Cloud Composer (`CTT_RUNNER=k8s`) each
+  task is a `KubernetesPodOperator` that runs the pipeline image
+  (`docker/Dockerfile`), so the pipeline's libraries never clash with
+  Composer's own Airflow packages. On the VM (`CTT_RUNNER=vm`) each task is
+  a `BashOperator` running `gce/run_task.sh`.
 - 2 retries with exponential backoff, a timeout per task and per run,
   `max_active_runs=1` (stages share `dvc.lock`), and an email to
   `CTT_ALERT_EMAILS` when a task fails.
 - `validate` and `anomalies` exit with an error on critical data problems,
   so the run stops before `publish` and no bad data version is recorded.
-- Parallel tasks are safe with DVC: locally DVC serializes its own writes to
-  `dvc.lock`; on Composer each pod merges only its own stage into the shared
-  `dvc.lock` with a conditional write that is retried on conflict.
+- Parallel tasks are safe with DVC: each task merges only its own stage
+  into the shared `dvc.lock` in GCS with a conditional write that is retried
+  when another task wrote first.
 
-Because each Composer task runs in a fresh pod, `run_stage.py` keeps the
-run's shared files in GCS (`CTT_STATE_URI`): it downloads `params.yaml` and
-the latest `dvc.lock` and pulls the stage's inputs before the stage, then
-pushes the outputs and uploads `dvc.lock`, logs and reports afterwards (logs
-and reports also when the stage fails).
-
-Deployment to Cloud Composer: see [composer/README.md](composer/README.md).
-
-Test the DAG on a laptop:
-
-```bash
-pip install "apache-airflow==2.10.5" apache-airflow-providers-cncf-kubernetes \
-  --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt
-export AIRFLOW_HOME=/tmp/airflow AIRFLOW__CORE__DAGS_FOLDER=$PWD/dags
-export CTT_RUNNER=local CTT_PYTHON=$PWD/.venv/bin/python
-airflow db migrate
-airflow dags test ctt_data_pipeline 2026-11-05 -c '{"snapshot": "20261101"}'
-```
+Because every task starts from a fresh copy of the code, `run_stage.py`
+keeps the run's shared files in GCS (`CTT_STATE_URI`, default
+`gs://ctt-mlops-project-data/data-pipeline/state`): it downloads
+`params.yaml`, the latest `dvc.lock` and the baseline and pulls the stage's
+inputs before the stage, then pushes the outputs and uploads `dvc.lock`,
+logs and reports afterwards (logs and reports also when the stage fails).
 
 ## 5. Data versioning with DVC
 
 - DVC is initialised in this folder (`dvc init --subdir`), so it does not
   touch the rest of the repository.
 - `dvc.yaml` declares each stage's code, input data, parameters and outputs.
-  `dvc.lock` records the md5 hash of every output, so each commit of
+  `dvc.lock` records the md5 hash of every output, so each run's
   `dvc.lock` is one exact data version, and a model can be traced back to the
   snapshot it was trained on.
-- The data itself goes to the DVC remote, the GCS bucket `gs://ctt-mlops-project-data` (project `ctt-mlops-project`)
-  (`dvc push`); git only holds `dvc.lock` and the small `.gitignore` files.
+- The data itself goes to the DVC remote in the GCS bucket
+  `gs://ctt-mlops-project-data`; each run's `dvc.lock` is kept in the state
+  folder next to it.
 
 ### DVC remote
 
-The remote URL in `.dvc/config` is a placeholder until the bucket name is
-set. Set it once (everyone with access to the bucket can then pull):
+The remote is `gs://ctt-mlops-project-data/dvc-store` (`.dvc/config`). The
+VM and the Composer pods reach it as `pipeline-sa`, without keys.
 
-```bash
-dvc remote modify gcs url gs://<bucket>/dvc-store
-gcloud auth application-default login   # Google account with access to ctt-mlops-project
-dvc push      # upload the data versions in dvc.lock
-dvc pull      # download them on another machine
-```
-
-Go back to an older data version: `git checkout <commit> -- dvc.lock && dvc
-checkout`. On Cloud Composer every run also writes
-`state/versions/<snapshot>/dvc.lock` to the bucket.
+Every run writes its data version to the state folder:
+`state/versions/<snapshot>/<run_id>.json` (output hashes and the validation
+summary) and `state/versions/<snapshot>/dvc.lock`. Restoring a version is a
+`dvc pull` with that `dvc.lock`, in a pod or on the VM.
 
 ## 6. Tracking and logging
 
-- **Logs:** every step logs to the console and to `logs/<step>.log`. On
-  Composer the console output appears in the task log and in Cloud Logging.
+- **Logs:** every step logs to the console and to `logs/<step>.log`. The
+  console output appears in the Airflow task log (and in Cloud Logging on
+  Composer), and the log files are uploaded to the run's state folder.
 - **Run records:** every step appends a JSON line to
   `logs/runs/<run_id>.jsonl` with start and end time, duration, status, error,
   git commit, metrics (rows, label counts, checks passed) and an md5
@@ -267,7 +227,7 @@ checkout`. On Cloud Composer every run also writes
   step that crashes outside Airflow sends the traceback; under Airflow the
   failure email comes from Airflow instead, so nobody gets two. Without SMTP
   settings the alert is only logged.
-- **Data versions:** `publish` writes `logs/versions/<snapshot>__<run_id>.json`
+- **Data versions:** `publish` writes `state/versions/<snapshot>/<run_id>.json`
   (output hashes plus the validation summary).
 
 ## 7. Data schema and statistics generation
@@ -301,12 +261,14 @@ Results go to `reports/validation/validation.json` (every check),
 `validate.fail_on: critical` a critical failure fails the stage (exit code
 1); `alert_on: warning` emails warnings too.
 
-Freeze a baseline after a run on a snapshot you trust, and commit it:
+Freeze a baseline after a run on a snapshot you trust:
 
 ```bash
-python -m scripts.schema_stats --freeze --reason "first real AACT snapshot"
-git add schema/baseline && git commit -m "Freeze baseline schema"
+REASON="first real AACT snapshot" ./gce/vm.sh freeze
 ```
+
+It is stored in `state/baseline/` in the bucket, and every task downloads it
+before running, so all later runs on either host validate against it.
 
 Until a baseline is frozen, `validate` checks the snapshot against its own
 suite and says so in the report.
@@ -343,8 +305,8 @@ discussed in `../docs/bias_report.md`.
 The Airflow Gantt chart of a sequential run showed every task waiting for the
 previous one, although `bias` needs only the raw snapshot and
 `schema_stats` and `anomalies` need only the features. Running them in
-parallel cut a 50,000-trial run from 30.3 s to 23.1 s. Details, both Gantt
-charts and how to reproduce the measurement: `docs/pipeline_optimization.md`.
+parallel shortens the run. Measurements on the VM, both Gantt charts and
+how to reproduce them: `docs/pipeline_optimization.md`.
 
 ## Interface for the acquisition and preprocessing code
 
@@ -369,23 +331,25 @@ records and alert emails say what kind of failure happened.
 ## Tests
 
 ```bash
-cd Data-Pipeline
-pytest
+pip install -r requirements.txt && pytest
 ```
 
-54 tests cover the placeholder snapshot and features, statistics values, the
+60 tests cover the test snapshot and features, statistics values, the
 inferred schema, every critical and warning check (a dropped column,
 duplicate or malformed ids, an invalid label, out-of-range values), drift
-detection, every anomaly check, the bias stage, the fail and alert
-policies, run records, email alerts (with a fake SMTP server), parameter
-overrides, the `dvc.lock` merge under concurrent writes, the stage graph and
-the DAG shape for both runners (the 3 DAG tests need Airflow installed and
-are skipped otherwise).
+detection, every anomaly check, the bias stage, the text stage, the Vertex AI
+job (spec, polling, cancel on stop, the round trip through the bucket), the
+fail and alert policies, run records, email alerts (with a fake SMTP
+server), parameter overrides, the `dvc.lock` merge under concurrent writes,
+the stage graph, and the DAG shape on both GCP runners (the 4 DAG tests need
+Airflow installed and are skipped otherwise). Google Cloud is faked in the
+tests, so they need no credentials.
 
 ## Reproducibility
 
-Anyone with the repository can run the full pipeline offline on the
-placeholder snapshot with `pip install -r requirements.txt && dvc repro`.
-The placeholder snapshot is seeded, so the same parameters give the same
-files and the same `dvc.lock` hashes. With access to the bucket, `dvc pull`
-restores the exact data of any committed `dvc.lock`.
+Anyone with access to `ctt-mlops-project` can rebuild the whole setup from
+the repository: build the two images, `./gce/vm.sh create` (or the Composer
+steps), then trigger a run. The test snapshot is seeded, so the same
+parameters give the same files and the same `dvc.lock` hashes, and every
+run's `dvc.lock` stays in `state/versions/` in the bucket, so the exact data
+of any run can be pulled again from the DVC remote.

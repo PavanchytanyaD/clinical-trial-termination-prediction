@@ -60,32 +60,6 @@ def test_text_stage_writes_every_trial(text_file):
     assert meta["all_trials"] is True and meta["n_rows"] == 300
 
 
-def test_local_backend(text_file, tmp_path, monkeypatch, stub_biobert):
-    out = tmp_path / "embeddings"
-    monkeypatch.setattr(embeddings, "TEXT_JSONL", text_file)
-    monkeypatch.setattr(embeddings, "EMB_DIR", out)
-    monkeypatch.setattr(embeddings, "tracked_step", fake_tracked_step)
-    monkeypatch.setattr(embeddings, "load_params", lambda: {
-        "embeddings": {"backend": "local", "max_trials": 50}})
-    embeddings.stage()
-    ids = out.joinpath("ids.txt").read_text().split()
-    assert len(ids) == 50
-    for field in FIELDS:
-        arr = np.load(out / f"{field}.npy")
-        assert arr.shape == (50, 8) and arr.dtype == np.float16
-    meta = json.loads((out / "meta.json").read_text())
-    assert meta["backend"] == "local" and meta["rows"] == 50
-    assert meta["fields"] == FIELDS
-
-
-def test_unknown_backend(monkeypatch):
-    monkeypatch.setattr(embeddings, "tracked_step", fake_tracked_step)
-    monkeypatch.setattr(embeddings, "load_params",
-                        lambda: {"embeddings": {"backend": "tpu"}})
-    with pytest.raises(ValueError, match="vertex or local"):
-        embeddings.stage()
-
-
 def test_vertex_job_spec_uses_gpu_and_pipeline_sa():
     p = {**embeddings.DEFAULTS, "max_trials": 10}
     spec = embeddings.vertex_job_spec(p, "gs://b/in.jsonl", "gs://b/out",
@@ -132,8 +106,7 @@ def test_wait_for_job_cancels_when_stopped():
     assert session.calls[-1] == ("post", "https://x/job:cancel")
 
 
-def test_vertex_backend_round_trip(text_file, tmp_path, monkeypatch,
-                                   stub_biobert):
+def test_vertex_round_trip(text_file, tmp_path, monkeypatch, stub_biobert):
     """stage(): upload text, run the job (here: the worker, in process),
     download the result into EMB_DIR."""
     bucket = {}
@@ -144,11 +117,11 @@ def test_vertex_backend_round_trip(text_file, tmp_path, monkeypatch,
     def gcs_download(uri, path):
         open(path, "wb").write(bucket[uri])
 
-    def gcs_download_dir(uri, local_dir):
-        local_dir.mkdir(parents=True, exist_ok=True)
+    def gcs_download_dir(uri, folder):
+        folder.mkdir(parents=True, exist_ok=True)
         for key, data in bucket.items():
             if key.startswith(uri + "/"):
-                (local_dir / key[len(uri) + 1:]).write_bytes(data)
+                (folder / key[len(uri) + 1:]).write_bytes(data)
 
     monkeypatch.setattr(embeddings, "gcs_download", gcs_download)
     monkeypatch.setattr(embeddings, "gcs_download_dir", gcs_download_dir)
@@ -171,12 +144,12 @@ def test_vertex_backend_round_trip(text_file, tmp_path, monkeypatch,
     monkeypatch.setattr(embeddings, "EMB_DIR", out)
     monkeypatch.setattr(embeddings, "tracked_step", fake_tracked_step)
     monkeypatch.setattr(embeddings, "load_params", lambda: {
-        "embeddings": {"backend": "vertex", "max_trials": 20}})
+        "embeddings": {"max_trials": 20}})
     embeddings.stage()
 
     assert submitted["displayName"] == \
         "ctt-biobert-manual-2026-10-25t10-00-00-00-00"
     meta = json.loads((out / "meta.json").read_text())
-    assert meta["backend"] == "vertex" and meta["rows"] == 20
+    assert meta["rows"] == 20
     assert meta["vertex_job"] == "projects/p/jobs/1"
     assert np.load(out / "title.npy").shape == (20, 8)

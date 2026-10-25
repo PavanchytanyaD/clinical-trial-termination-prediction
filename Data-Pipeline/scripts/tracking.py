@@ -50,7 +50,7 @@ def setup_logging(name, log_dir=LOG_DIR, level=logging.INFO):
 def run_id():
     rid = os.environ.get("PIPELINE_RUN_ID")
     if not rid:
-        rid = dt.datetime.now().strftime("local__%Y%m%dT%H%M%S")
+        rid = dt.datetime.now().strftime("manual__%Y%m%dT%H%M%S")
         # later steps of the same dvc repro share it
         os.environ["PIPELINE_RUN_ID"] = rid
     return rid

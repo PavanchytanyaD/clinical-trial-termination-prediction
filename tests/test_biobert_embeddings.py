@@ -1,6 +1,6 @@
 """Tests for the embedding code using a tiny randomly initialized BERT.
 
-No model download is needed: the tokenizer and model are built locally.
+No model download is needed: the tokenizer and model are built in the test.
 """
 
 import numpy as np
