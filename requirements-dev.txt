@@ -2,4 +2,4 @@
 #   pip install -r requirements-dev.txt
 black==24.10.0
 flake8==7.1.1
-pytest==8.3.3
+pytest==9.0.2  # same pin as requirements.txt

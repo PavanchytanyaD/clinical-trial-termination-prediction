@@ -61,3 +61,22 @@ def test_require_custom_error():
 def test_exception_hierarchy():
     assert issubclass(DataUnavailableError, PipelineError)
     assert issubclass(DataValidationError, PipelineError)
+
+
+def test_typed_errors_are_also_builtin_errors():
+    # existing code and tests catch the built-in exceptions
+    assert issubclass(DataUnavailableError, FileNotFoundError)
+    assert issubclass(DataValidationError, ValueError)
+    with pytest.raises(ValueError):
+        require(False, "bad value")
+
+
+def test_log_stage_reports_sys_exit_once(caplog):
+    @log_stage("exit_step")
+    def work():
+        raise SystemExit(1)
+
+    with caplog.at_level(logging.INFO), pytest.raises(SystemExit):
+        work()
+    failed = [r for r in caplog.records if "FAILED exit_step" in r.message]
+    assert len(failed) == 1 and failed[0].exc_info is None

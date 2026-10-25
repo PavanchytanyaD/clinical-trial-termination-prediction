@@ -5,21 +5,28 @@ so every step logs and fails the same way and the code stays consistent.
 
 ## Logging
 
-Use the shared logger in `src/logging_utils.py`. At the top of a step:
+- Scripts in `src/` use the shared logger in `src/logging_utils.py`. At the top of a step:
 
-~~~python
-from src.logging_utils import setup_logging
-setup_logging("my_step")          # console + logs/my_step.log
-~~~
+  ~~~python
+  from src.logging_utils import run_main
+  run_main(main, "my_step")       # console + logs/my_step.log, exit 1 on error
+  ~~~
 
-Do not call `logging.basicConfig` yourself and do not use `print` for status.
+- Pipeline stages in `Data-Pipeline/scripts/` use `tracked_step("name")` from
+  `Data-Pipeline/scripts/tracking.py`, which also writes a run record and sends the
+  failure alert.
+
+Do not use `print` for status. (`src/bias/run_bias_*.py` still set up logging with
+`logging.basicConfig`; move them to `run_main` when they are next changed.)
 
 ## Error handling
 
 Use the helpers in `src/error_handling.py`.
 
-Wrap each step's entry point so failures are logged with a traceback and the
-process exits non-zero (so Airflow / `run_main` detect it):
+Raise typed errors at the failure points (missing or unreadable data, bad values,
+missing settings). `run_main` / `tracked_step` log the traceback once and exit
+non-zero, so Airflow marks the task failed. Use `@log_stage` / `stage()` to time
+sub-steps inside a long function:
 
 ~~~python
 from src.error_handling import log_stage, require, DataUnavailableError
@@ -35,28 +42,38 @@ def main():
 - `with stage("name"):`: same, for part of a function.
 - `require(cond, msg, ErrorType)`: raise a clear, typed error when a check fails.
 
-Raise a typed error, not a bare `Exception`:
+Raise a typed error, not a bare `Exception`. Each one is also the matching
+built-in error, so existing `except FileNotFoundError` / `except ValueError` code
+keeps working:
 
 | Situation | Exception |
 | --- | --- |
-| Source missing / empty / unreachable | `DataUnavailableError` |
-| Schema / column / value check failed | `DataValidationError` |
-| Missing or invalid setting / env var | `ConfigError` |
+| Source missing / empty / unreachable | `DataUnavailableError` (a `FileNotFoundError`) |
+| Schema / column / value check failed | `DataValidationError` (a `ValueError`) |
+| Missing or invalid setting / env var | `ConfigError` (a `RuntimeError`) |
 
 ## Code style (PEP 8)
 
-Format and lint before every commit:
+Lint before every commit:
 
 ~~~bash
 pip install -r requirements-dev.txt   # one time
-black .
 flake8 .
 ~~~
 
-Line length is 100 (set in `pyproject.toml` and `.flake8`).
+Line length is 99, PEP 8's upper limit (set in `pyproject.toml` and `.flake8`).
+`black` is configured but optional: run it only on files you are changing, so it
+does not reformat other people's open work.
 
 ## Tests
 
 ~~~bash
-pytest
+pip install -r requirements.txt -r requirements-bias.txt -r requirements-dev.txt
+pytest                                   # src/ code: tests/
+cd Data-Pipeline && pip install -r requirements.txt && pytest   # pipeline: Data-Pipeline/tests/
 ~~~
+
+## Branches
+
+Work on a branch named `<name>/<topic>` (for example `nithish/s1-text-cleaning`) and
+push it; the integration branch merges everyone's branches so each commit keeps its author.
