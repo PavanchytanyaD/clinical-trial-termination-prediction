@@ -1,0 +1,5 @@
+# Extra packages for the bias detection step (src/bias), on top of the
+# team requirements.txt (numpy, pandas, psycopg2-binary, pytest).
+pyyaml==6.0.3
+scikit-learn==1.9.1
+fairlearn==0.15.0
