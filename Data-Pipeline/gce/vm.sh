@@ -99,7 +99,7 @@ case "${1:-}" in
   update)
     gc compute instances add-metadata "${VM}" --zone "${ZONE}" \
       --metadata-from-file startup-script=<(startup_script)
-    on_vm "cd ${APP} && sudo -u ctt git pull --ff-only && cd ${APP}/Data-Pipeline/gce/airflow && ([ -f .env ] || sudo cp ../../airflow/.env .env) && sudo -u ctt docker compose up -d --build --remove-orphans"
+    on_vm "cd ${APP} && sudo -u ctt git pull --ff-only && cd ${APP}/Data-Pipeline/gce/airflow && ([ -f .env ] || sudo install -o ctt -g ctt -m 600 ../../airflow/.env .env) && sudo -u ctt docker compose up -d --build --remove-orphans"
     ;;
   stop)   gc compute instances stop "${VM}" --zone "${ZONE}" ;;
   start)  gc compute instances start "${VM}" --zone "${ZONE}" ;;

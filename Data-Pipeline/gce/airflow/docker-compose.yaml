@@ -51,15 +51,17 @@ services:
 
   airflow-init:
     <<: *airflow
-    entrypoint: /bin/bash
+    # the image's entrypoint registers AIRFLOW_UID as a user, which Airflow
+    # needs; the admin user may already exist on later starts
     command:
+      - bash
       - -c
       - |
         airflow db migrate &&
-        airflow users create --role Admin --username admin \
-          --firstname Admin --lastname User --email admin@example.com \
-          --password "$${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}" \
-          || true
+        { airflow users create --role Admin --username admin \
+            --firstname Admin --lastname User --email admin@example.com \
+            --password "$${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}" \
+          || airflow users list | grep -q admin; }
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:-airflow}@postgres/airflow
