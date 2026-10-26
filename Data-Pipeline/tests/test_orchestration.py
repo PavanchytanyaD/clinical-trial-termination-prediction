@@ -59,6 +59,17 @@ def test_stage_graph_matches_dvc_yaml():
         >= {"text"}
 
 
+def test_image_copies_every_folder_the_stages_read():
+    """Each pod runs the pipeline image, so every ../ dependency in
+    dvc.yaml (team code, shared configs) must be copied into it."""
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text()
+    copied = {line.split()[1].rstrip("/") for line in dockerfile.splitlines()
+              if line.startswith("COPY ")}
+    needed = {dep.split("/")[1] for stage in run_stage.stages()
+              for dep in run_stage.stage_deps(stage) if dep.startswith("../")}
+    assert needed <= copied, f"not in the image: {sorted(needed - copied)}"
+
+
 def test_unknown_stage(monkeypatch):
     monkeypatch.delenv("PIPELINE_STATE_URI", raising=False)
     with pytest.raises(ValueError, match="unknown stage"):

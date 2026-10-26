@@ -1,6 +1,6 @@
 # Image the Composer DAG runs for every stage (KubernetesPodOperator).
-# Build from the repository root, so the image also has src/ (the ingestion
-# and feature code the acquire and preprocess stages call):
+# Build from the repository root, so the image also has src/ (the ingestion,
+# feature and bias code the stages call) and configs/:
 #
 #   docker build -f Data-Pipeline/docker/Dockerfile -t data-pipeline .
 #
@@ -21,6 +21,8 @@ COPY Data-Pipeline/requirements.txt Data-Pipeline/requirements.txt
 RUN pip install -r Data-Pipeline/requirements.txt
 
 COPY src/ src/
+# shared settings the stages read (bias_config.yaml for the bias stage)
+COPY configs/ configs/
 COPY Data-Pipeline/ Data-Pipeline/
 
 WORKDIR /opt/ctt/Data-Pipeline

@@ -49,6 +49,23 @@ REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 gc() { gcloud --project "${PROJECT}" "$@"; }
 env_flags() { echo --environment "${ENV_NAME}" --location "${REGION}"; }
 
+# Trigger a DAG; right after an upload the scheduler may not have registered
+# it yet (DagNotFound), so retry for up to 5 minutes
+trigger_dag() {
+  local dag="$1" conf="$2" i
+  for i in $(seq 1 10); do
+    gc composer environments run "${ENV_NAME}" --location "${REGION}" \
+      dags unpause -- "${dag}" >/dev/null 2>&1 || true
+    if gc composer environments run "${ENV_NAME}" --location "${REGION}" \
+         dags trigger -- "${dag}" -c "${conf}"; then
+      return 0
+    fi
+    echo "${dag} not registered yet, retrying in 30 s (${i}/10)"
+    sleep 30
+  done
+  return 1
+}
+
 # Build Data-Pipeline/docker/<dockerfile> with Cloud Build (repository root as
 # context: src/ + Data-Pipeline/) and push it as :latest (and :$TAG).
 # It builds the committed code (git archive HEAD). The archive goes to our own
@@ -96,13 +113,13 @@ EOF
   return "${rc}"
 }
 
-secret_args() {
-  # SMTP_* / ALERT_* / AACT_* lines of .env with a value, base64-encoded as
-  # the Composer API expects
+secret_data() {
+  # SMTP_* / ALERT_* / AACT_* lines of .env with a value, as Kubernetes Secret
+  # data (base64-encoded values)
   [ -f "${HERE}/.env" ] || return 0
   while IFS='=' read -r key value; do
     [[ -z "${key}" || "${key}" == \#* || -z "${value}" ]] && continue
-    echo "--secret-data=${key}=$(printf '%s' "${value}" | base64 | tr -d '\n')"
+    echo "  ${key}: $(printf '%s' "${value}" | base64 | tr -d '\n')"
   done < <(grep -E '^(SMTP_|ALERT_|AACT_)' "${HERE}/.env")
 }
 
@@ -159,21 +176,28 @@ step() {
       ;;
     config)
       local smtp=""
-      [ -n "$(secret_args)" ] && smtp="${SECRET_NAME}"
+      [ -n "$(secret_data)" ] && smtp="${SECRET_NAME}"
       gc composer environments update "${ENV_NAME}" --location "${REGION}" \
         --update-env-variables "CTT_IMAGE=${IMAGE}:latest,CTT_STATE_URI=${STATE_URI},CTT_ALERT_EMAILS=${ALERT_EMAILS},CTT_SMTP_SECRET=${smtp},CTT_SOURCE=${SOURCE:-sample}"
       ;;
     secret)
-      local args=()
-      while IFS= read -r a; do args+=("${a}"); done < <(secret_args)
-      if [ "${#args[@]}" -eq 0 ]; then
+      local data file
+      data="$(secret_data)"
+      if [ -z "${data}" ]; then
         echo "no SMTP_/ALERT_/AACT_ values in Data-Pipeline/.env: no secret"
         return 0
       fi
+      # Kubernetes Secret manifest, private and deleted right after
+      file="$(mktemp)"
+      chmod 600 "${file}"
+      printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\ntype: Opaque\ndata:\n%s\n' \
+        "${SECRET_NAME}" "${data}" > "${file}"
       gc beta composer environments user-workloads-secrets create \
-          $(env_flags) "${SECRET_NAME}" "${args[@]}" 2>/dev/null \
+          $(env_flags) --secret-file-path "${file}" 2>/dev/null \
         || gc beta composer environments user-workloads-secrets update \
-             $(env_flags) "${SECRET_NAME}" "${args[@]}"
+             $(env_flags) --secret-file-path "${file}" \
+        || { rm -f "${file}"; return 1; }
+      rm -f "${file}"
       ;;
     dag)
       gc composer environments storage dags import $(env_flags) \
@@ -185,13 +209,12 @@ step() {
       ;;
     trigger)
       conf="{\"snapshot\": \"${SNAPSHOT:-$(date +%Y%m%d)}\", \"source\": \"${SOURCE:-sample}\", \"zip\": \"${ZIP:-}\", \"sample_trials\": \"${SAMPLE_TRIALS:-}\"}"
-      gc composer environments run "${ENV_NAME}" --location "${REGION}" \
-        dags trigger -- ctt_data_pipeline -c "${conf}"
+      # Composer creates DAGs paused; trigger_dag unpauses first
+      trigger_dag ctt_data_pipeline "${conf}"
       ;;
     freeze)
-      gc composer environments run "${ENV_NAME}" --location "${REGION}" \
-        dags trigger -- ctt_freeze_baseline \
-        -c "{\"reason\": \"${REASON:-trusted snapshot}\"}"
+      trigger_dag ctt_freeze_baseline \
+        "{\"reason\": \"${REASON:-trusted snapshot}\"}"
       ;;
     ui)
       gc composer environments describe "${ENV_NAME}" --location "${REGION}" \
