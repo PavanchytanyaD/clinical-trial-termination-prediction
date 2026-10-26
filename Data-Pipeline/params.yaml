@@ -11,6 +11,13 @@ acquire:
   snapshot: "20261001"
   sample_trials: 500
   seed: 42
+  # db source only: which trials to download (empty = every trial).
+  # Interventional trials registered in 2019: about 24,000 trials, a full
+  # pipeline run in about 30 minutes; recent years are left out because most
+  # of their trials have not ended yet, so their outcome is unknown.
+  registered_from: "2019-01-01"
+  registered_to: "2019-12-31"
+  study_types: [INTERVENTIONAL]
 
 preprocess:
   # auto: src/features/structured_features.py if present, else placeholder
