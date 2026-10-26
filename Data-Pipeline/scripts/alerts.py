@@ -36,7 +36,9 @@ def smtp_settings():
         "host": get("SMTP_HOST"),
         "port": int(get("SMTP_PORT", "587")),
         "user": get("SMTP_USER"),
-        "password": get("SMTP_PASSWORD"),
+        # Gmail shows app passwords as "abcd efgh ijkl mnop"; the spaces
+        # are only for reading
+        "password": get("SMTP_PASSWORD").replace(" ", ""),
         "starttls": get("SMTP_STARTTLS", "true").lower() != "false",
         "sender": get("ALERT_EMAIL_FROM") or get("SMTP_USER"),
         "recipients": recipients,

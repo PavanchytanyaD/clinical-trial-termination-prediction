@@ -128,6 +128,25 @@ def test_tracked_step_records_failure_and_alerts(run_dirs, monkeypatch):
     assert sent == ["step demo failed"]
 
 
+@pytest.mark.parametrize("attempt, tries, alerted",
+                         [("1", "3", False), ("3", "3", True), ("", "", True)])
+def test_task_failure_alerts_only_on_the_last_attempt(
+        attempt, tries, alerted, tmp_path, monkeypatch):
+    monkeypatch.setenv("PIPELINE_TRY", attempt)
+    monkeypatch.setenv("PIPELINE_MAX_TRIES", tries)
+    monkeypatch.setattr(run_stage, "LOG_DIR", tmp_path)
+    (tmp_path / "bias.log").write_text("line 1\nKeyError: 'phase'\n")
+    sent = []
+    monkeypatch.setattr(run_stage, "send_alert",
+                        lambda subject, body: sent.append((subject, body)))
+    run_stage.alert_failure("bias", "RuntimeError: stage bias failed")
+    assert bool(sent) == alerted
+    if sent:
+        subject, body = sent[0]
+        assert subject == "task bias failed"
+        assert "KeyError: 'phase'" in body and "stage bias failed" in body
+
+
 def test_no_step_alert_when_airflow_alerts(run_dirs, monkeypatch):
     monkeypatch.setattr(tracking, "setup_logging",
                         lambda name: tracking.logging.getLogger(name))

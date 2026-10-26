@@ -88,9 +88,11 @@ def log_failure(context):
 def step_env():
     return {"PIPELINE_RUN_ID": "{{ run_id }}",
             "PIPELINE_STATE_URI": STATE_URI,
-            # Airflow sends its own failure email; steps only email
-            # validation results
-            "PIPELINE_ORCHESTRATED": "1"}
+            # run_stage.py emails a task failure once, on the last attempt;
+            # the stage itself then does not email it a second time
+            "PIPELINE_ORCHESTRATED": "1",
+            "PIPELINE_TRY": "{{ ti.try_number }}",
+            "PIPELINE_MAX_TRIES": "{{ task.retries + 1 }}"}
 
 
 def step(stage, params=None, extra_args=(), timeout=timedelta(hours=2)):

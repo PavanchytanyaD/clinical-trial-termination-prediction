@@ -42,6 +42,7 @@ import yaml
 from scripts.config import (BASELINE_DIR, DVC_FILE, LOCK_FILE, LOG_DIR,
                             PARAMS_FILE, ROOT,
                             VALIDATION_SUMMARY, load_params)
+from scripts.alerts import send_alert
 from scripts.tracking import run_id, setup_logging
 
 logger = logging.getLogger("run_stage")
@@ -394,6 +395,30 @@ def freeze(reason):
     return info
 
 
+def alert_failure(stage, error):
+    """Email the subscribers that a task failed, with the end of its log.
+
+    Under Airflow only the final attempt alerts (PIPELINE_TRY and
+    PIPELINE_MAX_TRIES come from the DAG), so a step that succeeds on a
+    retry sends nothing.
+    """
+    attempt = int(os.environ.get("PIPELINE_TRY") or 1)
+    tries = int(os.environ.get("PIPELINE_MAX_TRIES") or 1)
+    if attempt < tries:
+        logger.info("attempt %d of %d failed; no alert until the last",
+                    attempt, tries)
+        return
+    tail = []
+    for name in (f"{stage}.log", f"run_stage_{stage}.log"):
+        path = LOG_DIR / name
+        if path.exists():
+            lines = path.read_text(errors="replace").splitlines()[-40:]
+            tail += [f"--- last lines of {name} ---", *lines, ""]
+    send_alert(f"task {stage} failed",
+               f"Run: {run_id()}\nTask: {stage} (attempt {attempt} of "
+               f"{tries})\nError: {error}\n\n" + "\n".join(tail))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -414,8 +439,9 @@ def main():
             freeze(args.reason)
         else:
             run_stage(args.stage, args.param)
-    except Exception:
+    except Exception as e:
         logger.exception("run_stage %s failed", args.stage)
+        alert_failure(args.stage, f"{type(e).__name__}: {e}")
         raise SystemExit(1)
 
 
