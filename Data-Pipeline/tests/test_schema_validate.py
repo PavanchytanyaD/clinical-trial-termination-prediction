@@ -47,6 +47,32 @@ def test_statistics_count_missing(toy):
     assert c["missing"] == 50 and c["missing_rate"] == 0.25
 
 
+def test_statistics_count_outliers(toy):
+    c = compute_statistics(toy)["columns"]["n_facilities"]
+    assert c["outliers"]["count"] == 0  # 0..199, evenly spread
+    toy.loc[:4, "n_facilities"] = 5000
+    c = compute_statistics(toy)["columns"]["n_facilities"]
+    assert c["outliers"]["count"] == 5 and c["outliers"]["rate"] == 0.025
+    assert c["outliers"]["high"] < 5000
+
+
+def test_filled_values_are_not_outliers(toy):
+    toy.loc[:4, "n_facilities"] = 5000
+    toy["n_facilities_missing"] = 0
+    toy.loc[:4, "n_facilities_missing"] = 1  # filled in preprocessing
+    c = compute_statistics(toy)["columns"]["n_facilities"]
+    assert c["outliers"]["count"] == 0
+
+
+def test_statistics_and_anomalies_use_one_outlier_rule(toy):
+    from scripts import anomalies
+    toy.loc[:19, "n_facilities"] = 5000  # 10% outliers, above the 5% limit
+    stats = compute_statistics(toy, outlier_k=3.0)["columns"]["n_facilities"]
+    found = [f for f in anomalies.outlier_anomalies(toy, 0.05, 3.0)
+             if f["column"] == "n_facilities"]
+    assert found and found[0]["count"] == stats["outliers"]["count"] == 20
+
+
 # ---------------------------------------------------------------- schema
 def test_suite_has_the_critical_contract(toy):
     suite = infer_suite(compute_statistics(toy))

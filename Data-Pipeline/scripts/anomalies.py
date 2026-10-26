@@ -36,7 +36,7 @@ from scripts.config import (ANOMALY_JSON, ANOMALY_MD, ANOMALY_SUMMARY,
                             FEATURES_CSV, load_params)
 from scripts.schema_stats import (DATE_COLUMNS, DATE_REGEX, ID_COLUMN,
                                   LABEL_COLUMN, NCT_REGEX, column_kind,
-                                  load_features)
+                                  iqr_outliers, load_features, real_values)
 from scripts.tracking import tracked_step
 from src.error_handling import DataValidationError
 
@@ -117,7 +117,7 @@ def range_anomalies(df, year_max):
     for col, low, high, why in checks:
         if col not in df:
             continue
-        values = df.loc[present(df, col), col]
+        values = real_values(df, col)
         bad = values[(values < low) | ((values > high) if high else False)]
         if len(bad):
             out.append(finding("impossible_values", "critical", col,
@@ -155,15 +155,11 @@ def outlier_anomalies(df, max_share, k):
             continue
         if column_kind(col, df[col]) != "numeric":
             continue
-        values = df.loc[present(df, col), col]
-        if len(values) < 20:
+        values = real_values(df, col)
+        found = iqr_outliers(values, k)
+        if found is None:
             continue
-        q1, q3 = values.quantile(0.25), values.quantile(0.75)
-        iqr = q3 - q1
-        if iqr == 0:
-            continue
-        low, high = q1 - k * iqr, q3 + k * iqr
-        outliers = values[(values < low) | (values > high)]
+        low, high, outliers = found
         share = len(outliers) / len(values)
         if share > max_share:
             out.append(finding(

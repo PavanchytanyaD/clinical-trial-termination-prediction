@@ -4,8 +4,8 @@ Reads data/processed/structured_features.csv and writes:
 
 * reports/statistics/statistics.json and statistics.md: dataset statistics
   (rows, label balance) and per-column statistics (type, missing rate,
-  distinct values, min / max / mean / std / quantiles, top categories,
-  invalid dates or ids),
+  distinct values, min / max / mean / std / quantiles, outliers, top
+  categories, invalid dates or ids),
 * schema/generated/expectation_suite.json: a Great Expectations suite
   inferred from this snapshot (the schema): the exact column set, types,
   nulls, value sets, ranges and id / date formats.
@@ -58,6 +58,9 @@ NUMERIC_TYPES = ["int8", "int16", "int32", "int64", "float32", "float64",
                  "Int64", "Float64"]
 COUNT_SUFFIXES = ("_years", "_year", "_words", "_count")
 QUANTILES = [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]
+# IQR multiplier for outliers; params.yaml anomalies.iqr_k overrides it, so
+# the statistics and the anomaly check use the same rule
+OUTLIER_K = 3.0
 DEFAULTS = {"min_rows": 100, "range_slack": 0.5, "mostly": 0.99,
             "max_missing_increase": 0.05, "categorical_max_distinct": 50}
 
@@ -84,12 +87,37 @@ def column_kind(name, series):
     return "categorical"
 
 
+def real_values(df, col):
+    """Values of col that are real, not filled in during preprocessing
+    (its <col>_missing flag is not set)."""
+    mask = df[col].notna()
+    flag = f"{col}_missing"
+    if flag in df:
+        mask &= df[flag] == 0
+    return df.loc[mask, col]
+
+
+def iqr_outliers(values, k=OUTLIER_K):
+    """(low, high, outlier values) for values outside [Q1 - k IQR,
+    Q3 + k IQR]; None with fewer than 20 values or no spread (IQR 0)."""
+    if len(values) < 20:
+        return None
+    q1, q3 = values.quantile(0.25), values.quantile(0.75)
+    iqr = q3 - q1
+    if iqr == 0:
+        return None
+    low, high = q1 - k * iqr, q3 + k * iqr
+    return low, high, values[(values < low) | (values > high)]
+
+
 def _num(x):
     """JSON-safe float (None for NaN)."""
     return None if x is None or pd.isna(x) else round(float(x), 6)
 
 
-def column_statistics(name, series):
+def column_statistics(name, series, real=None, outlier_k=OUTLIER_K):
+    """real: the column's values that were not filled in during
+    preprocessing (outliers are counted among those only)."""
     kind = column_kind(name, series)
     n = len(series)
     missing = int(series.isna().sum())
@@ -106,6 +134,14 @@ def column_statistics(name, series):
             qs = values.quantile(QUANTILES) if len(values) else {}
             s["quantiles"] = {f"p{int(q * 100):02d}": _num(qs[q])
                               for q in QUANTILES} if len(values) else {}
+            real = values if real is None else real
+            found = iqr_outliers(real, outlier_k)
+            s["outliers"] = None if found is None else {
+                "rule": f"outside Q1 - {outlier_k:g} IQR, "
+                        f"Q3 + {outlier_k:g} IQR",
+                "low": _num(found[0]), "high": _num(found[1]),
+                "count": int(len(found[2])),
+                "rate": _num(len(found[2]) / len(real))}
     elif kind == "categorical":
         top = values.astype(str).value_counts().head(20)
         s["top_values"] = {str(k): int(v) for k, v in top.items()}
@@ -134,7 +170,7 @@ def snapshot_info():
     return info
 
 
-def compute_statistics(df, info=None):
+def compute_statistics(df, info=None, outlier_k=OUTLIER_K):
     labels = df[LABEL_COLUMN] if LABEL_COLUMN in df else pd.Series(dtype=float)
     labelled = labels.dropna()
     return {
@@ -149,7 +185,9 @@ def compute_statistics(df, info=None):
                              "unfinished": int(labels.isna().sum())},
             "stopped_rate": _num(labelled.mean()) if len(labelled) else None,
         },
-        "columns": {c: column_statistics(c, df[c]) for c in df.columns},
+        "columns": {c: column_statistics(c, df[c], real_values(df, c),
+                                         outlier_k)
+                    for c in df.columns},
     }
 
 
@@ -242,16 +280,20 @@ def write_markdown(stats, path=STATS_MD):
         f"- Rows: {d['n_rows']}, columns: {d['n_columns']}",
         f"- Labels: {d['label_counts']}, stopped rate among finished trials: "
         f"{d['stopped_rate']}", "",
-        "| column | kind | missing % | distinct | min | mean | max / top |",
-        "|---|---|---|---|---|---|---|",
+        "| column | kind | missing % | distinct | min | mean | max / top "
+        "| outliers % |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for name, c in stats["columns"].items():
         top = c.get("max")
         if c["kind"] == "categorical":
             top = ", ".join(list(c.get("top_values", {}))[:3])
+        o = c.get("outliers")
+        outliers = f"{100 * o['rate']:.1f}" if o else ""
         lines.append(f"| {name} | {c['kind']} | "
                      f"{100 * (c['missing_rate'] or 0):.1f} | {c['distinct']} "
-                     f"| {c.get('min', '')} | {c.get('mean', '')} | {top} |")
+                     f"| {c.get('min', '')} | {c.get('mean', '')} | {top} "
+                     f"| {outliers} |")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -297,7 +339,8 @@ def main():
             run["metrics"].update(freeze(args.reason))
             return
         df = load_features()
-        stats = compute_statistics(df, snapshot_info())
+        k = load_params().get("anomalies", {}).get("iqr_k", OUTLIER_K)
+        stats = compute_statistics(df, snapshot_info(), outlier_k=float(k))
         STATS_JSON.parent.mkdir(parents=True, exist_ok=True)
         STATS_JSON.write_text(json.dumps(stats, indent=2))
         write_markdown(stats)
