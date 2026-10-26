@@ -320,7 +320,7 @@ def main():
         if not BASELINE_SUITE.exists():
             logger.warning("no baseline schema yet: validation will use this "
                            "snapshot's schema. Freeze a trusted snapshot with "
-                           "`./gce/vm.sh freeze`")
+                           "`./composer/deploy.sh freeze`")
 
 
 if __name__ == "__main__":

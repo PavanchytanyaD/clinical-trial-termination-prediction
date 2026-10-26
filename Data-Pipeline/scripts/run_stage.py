@@ -6,11 +6,11 @@ bucket). Airflow decides when and in what order stages run, retries them and
 alerts on failure. Running a stage through DVC means an unchanged stage is
 skipped and every output is versioned.
 
-Every task starts from a fresh copy of the code (a Composer pod, or a
-temporary folder on the VM: gce/run_task.sh), so the run's shared state lives
-in GCS (PIPELINE_STATE_URI, default gs://ctt-mlops-project-data/data-pipeline/
-state). Before the stage, the run's params.yaml and the latest dvc.lock are
-downloaded from there and the stage's inputs are pulled from the DVC remote;
+Every task is a fresh Composer pod started from the pipeline image, so the
+run's shared state lives in GCS (PIPELINE_STATE_URI, default
+gs://ctt-mlops-project-data/data-pipeline/state). Before the stage, the run's
+params.yaml and the latest dvc.lock are downloaded from there and the
+stage's inputs are pulled from the DVC remote;
 after it, the outputs are pushed and dvc.lock is merged back. Logs and
 reports are uploaded even when the stage fails, so a failed validation can be
 read.

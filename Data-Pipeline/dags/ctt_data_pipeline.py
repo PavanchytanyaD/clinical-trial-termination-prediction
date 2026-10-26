@@ -8,9 +8,8 @@
 Each task runs one DVC stage (scripts/run_stage.py), so DVC versions every
 output and skips stages whose inputs did not change; Airflow schedules the
 run, orders the steps, retries failed steps and emails on failure.
-`embeddings` computes the BioBERT text embeddings in a Vertex AI GPU job
-(params.yaml embeddings.backend) and waits for it; DVC skips it when the
-text did not change.
+`embeddings` computes the BioBERT text embeddings in a Vertex AI GPU job and
+waits for it; DVC skips it when the text did not change.
 Independent branches run in parallel (bias needs only the raw snapshot;
 schema_stats and anomalies both need only the features), which shortens the
 run; see docs/pipeline_optimization.md.
@@ -18,19 +17,17 @@ run; see docs/pipeline_optimization.md.
 fails the task and stops the run before `publish` records a bad data
 version.
 
-It runs on Google Cloud in one of two places, picked by CTT_RUNNER:
+It runs on Cloud Composer, which only orchestrates: each task is a
+Kubernetes pod started from the pipeline image in Artifact Registry
+(docker/Dockerfile, built and pushed by CI), with its run state in GCS and
+its data in the DVC remote.
 
-  k8s  Cloud Composer: each task is a pod running the pipeline image
-       (docker/Dockerfile)
-  vm   the Compute Engine VM (gce/): each task runs gce/run_task.sh, which
-       copies the code to a fresh folder, so tasks are isolated as in a pod
+A second DAG, ctt_freeze_baseline, makes the latest run's schema and
+statistics the validation baseline: {"reason": "first real AACT snapshot"}.
 
-Either way the run's shared state is in GCS and the data in the DVC remote.
+Configuration (environment variables of the Composer environment):
 
-Configuration (environment variables):
-
-  CTT_RUNNER        k8s (default) or vm
-  CTT_IMAGE         pipeline image in Artifact Registry (k8s runner)
+  CTT_IMAGE         pipeline image in Artifact Registry
   CTT_STATE_URI     shared run state (default gs://ctt-mlops-project-data/
                     data-pipeline/state)
   CTT_ALERT_EMAILS  comma-separated failure-email recipients
@@ -38,7 +35,6 @@ Configuration (environment variables):
   CTT_ZIP           default acquire.zip, for source zip
   CTT_SMTP_SECRET   Kubernetes secret with SMTP_* / ALERT_* / AACT_* keys
   CTT_NAMESPACE     pod namespace (Composer 3: composer-user-workloads)
-  CTT_REPO          repository checkout on the VM (vm runner)
 
 Trigger with a config to pick the snapshot or source for one run:
     {"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}
@@ -48,21 +44,16 @@ and, for the test source, its size: {"source": "sample", "sample_trials": 50000}
 import json
 import logging
 import os
-import shlex
 from datetime import datetime, timedelta
 
 from airflow import DAG
-
-try:  # Airflow 3
-    from airflow.providers.standard.operators.bash import BashOperator
-except ImportError:  # Airflow 2
-    from airflow.operators.bash import BashOperator
+from airflow.providers.cncf.kubernetes.operators.pod import \
+    KubernetesPodOperator
+from airflow.providers.cncf.kubernetes.secret import Secret
+from kubernetes.client import models as k8s
 
 log = logging.getLogger(__name__)
 
-RUNNER = os.environ.get("CTT_RUNNER", "k8s")
-if RUNNER not in ("k8s", "vm"):
-    raise ValueError(f"CTT_RUNNER must be k8s or vm, got {RUNNER!r}")
 IMAGE = os.environ.get(
     "CTT_IMAGE",
     "us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest")
@@ -72,10 +63,6 @@ ALERT_EMAILS = [e.strip() for e in
                 os.environ.get("CTT_ALERT_EMAILS", "").split(",") if e.strip()]
 NAMESPACE = os.environ.get("CTT_NAMESPACE", "composer-user-workloads")
 SMTP_SECRET = os.environ.get("CTT_SMTP_SECRET", "")
-REPO = os.environ.get(
-    "CTT_REPO",
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
-        __file__)))))
 
 # Per-run parameters: trigger config first, then environment defaults.
 # Templates use double quotes only, so shell-quoting them keeps them intact.
@@ -87,6 +74,7 @@ ZIP = ('{{ dag_run.conf.get("zip") or '
        + json.dumps(os.environ.get("CTT_ZIP", "")) + " }}")
 # empty = keep params.yaml's value
 SAMPLE_TRIALS = '{{ dag_run.conf.get("sample_trials") or "" }}'
+REASON = '{{ dag_run.conf.get("reason") or "trusted snapshot" }}'
 
 
 def log_failure(context):
@@ -105,8 +93,8 @@ def step_env():
             "PIPELINE_ORCHESTRATED": "1"}
 
 
-def step(stage, params=None, timeout=timedelta(hours=2)):
-    """One pipeline stage as a task, on the configured runner.
+def step(stage, params=None, extra_args=(), timeout=timedelta(hours=2)):
+    """One pipeline stage as a pod running the pipeline image.
 
     params are params.yaml overrides ({"acquire.snapshot": "..."}); values
     may be Jinja templates.
@@ -114,22 +102,8 @@ def step(stage, params=None, timeout=timedelta(hours=2)):
     args = [stage]
     for key, value in (params or {}).items():
         args += ["--param", f"{key}={value}"]
-    if RUNNER == "vm":
-        script = os.path.join(REPO, "Data-Pipeline", "gce", "run_task.sh")
-        # trailing space: Airflow would otherwise read a command ending in
-        # .sh as a Jinja template file
-        cmd = " ".join([shlex.quote(script), *map(shlex.quote, args)]) + " "
-        return BashOperator(task_id=stage, bash_command=cmd, env=step_env(),
-                            append_env=True, execution_timeout=timeout)
-
-    from airflow.providers.cncf.kubernetes.operators.pod import \
-        KubernetesPodOperator
-    from kubernetes.client import models as k8s
-
-    secrets = []
-    if SMTP_SECRET:
-        from airflow.providers.cncf.kubernetes.secret import Secret
-        secrets = [Secret("env", None, SMTP_SECRET)]
+    args += list(extra_args)
+    secrets = [Secret("env", None, SMTP_SECRET)] if SMTP_SECRET else []
     return KubernetesPodOperator(
         task_id=stage,
         name=f"ctt-{stage.replace('_', '-')}",
@@ -198,3 +172,16 @@ with DAG(
     schema_stats >> validate
     text >> embeddings
     [validate, anomalies, bias, embeddings] >> publish
+
+
+with DAG(
+    dag_id="ctt_freeze_baseline",
+    description="Make the latest run's schema and statistics the baseline",
+    schedule=None,
+    start_date=datetime(2026, 10, 1),
+    catchup=False,
+    default_args={**default_args, "retries": 0},
+    tags=["ctt", "data-pipeline"],
+) as freeze_dag:
+    step("freeze", extra_args=["--reason", REASON],
+         timeout=timedelta(minutes=30))

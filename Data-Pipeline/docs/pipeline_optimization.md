@@ -6,9 +6,11 @@ what was measured, what was changed and the result.
 
 ## How it was measured
 
-- Airflow 2.10.5 (LocalExecutor on PostgreSQL) on the Compute Engine VM
-  `ctt-airflow` (e2-standard-4), each task in its own copy of the code
-  (`gce/run_task.sh`), data and run state in GCS, BioBERT on a Vertex AI T4.
+- Measured on 2026-10-25 with this DAG and these stages on Airflow 2.10.5
+  (LocalExecutor) on a Compute Engine VM (e2-standard-4), the host used
+  before the pipeline moved to Cloud Composer; each task in its own copy of
+  the code, data and run state in GCS, BioBERT on a Vertex AI T4. The
+  dependency structure, and so the gain, is the same on Composer.
 - Test snapshot with 50,000 trials (`"sample_trials": 50000` in the trigger
   config), so every stage has real work to do.
 - Each run used a different snapshot and sample size, so DVC re-ran every
@@ -99,19 +101,17 @@ the feature, bias and check work costs no extra time.
 
 ## Reproduce
 
-On the VM (`./gce/vm.sh` from `Data-Pipeline/`, then in the scheduler
-container through `gcloud compute ssh ctt-airflow`):
+On Composer (`./composer/deploy.sh up` first):
 
 ```bash
-cd /opt/ctt-repo/Data-Pipeline/gce/airflow
-alias af='sudo -u ctt docker compose exec -T scheduler airflow'
-af pools set default_pool 1 sequential-baseline
-af dags trigger ctt_data_pipeline -c '{"snapshot": "20261026", "source": "sample", "sample_trials": 50000}'
+af() { gcloud composer environments run ctt-composer --location us-central1 "$@"; }
+af pools set -- default_pool 1 sequential-baseline
+SNAPSHOT=20261026 SAMPLE_TRIALS=50000 ./composer/deploy.sh trigger
 # when it has finished:
-af pools set default_pool 16 parallel
-af dags trigger ctt_data_pipeline -c '{"snapshot": "20261027", "source": "sample", "sample_trials": 50001}'
+af pools set -- default_pool 16 parallel
+SNAPSHOT=20261027 SAMPLE_TRIALS=50001 ./composer/deploy.sh trigger
 # then, for each run:
-af tasks states-for-dag-run ctt_data_pipeline <run_id> -o json > run.json
+af tasks states-for-dag-run -- ctt_data_pipeline <run_id> -o json > run.json
 ```
 
 and draw each chart with `python docs/gantt.py run.json "<title>" <out.png>`.

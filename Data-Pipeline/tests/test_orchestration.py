@@ -188,29 +188,17 @@ def test_alert_failure_does_not_raise(monkeypatch):
 
 
 # ---------------------------------------------------------------- DAG
-def dag_bag(runner, monkeypatch):
+def load_dag(dag_id="ctt_data_pipeline"):
     pytest.importorskip("airflow.models")
+    pytest.importorskip("airflow.providers.cncf.kubernetes")
     from airflow.models import DagBag
-    monkeypatch.setenv("CTT_RUNNER", runner)
-    return DagBag(dag_folder=str(ROOT / "dags"), include_examples=False)
-
-
-def load_dag(runner, monkeypatch):
-    bag = dag_bag(runner, monkeypatch)
+    bag = DagBag(dag_folder=str(ROOT / "dags"), include_examples=False)
     assert bag.import_errors == {}
-    return bag.get_dag("ctt_data_pipeline")
+    return bag.get_dag(dag_id)
 
 
-def test_dag_runs_only_on_gcp_runners(monkeypatch):
-    errors = dag_bag("bare-metal", monkeypatch).import_errors
-    assert any("CTT_RUNNER must be k8s or vm" in e for e in errors.values())
-
-
-@pytest.mark.parametrize("runner, operator",
-                         [("vm", "BashOperator"),
-                          ("k8s", "KubernetesPodOperator")])
-def test_dag_structure(runner, operator, monkeypatch):
-    dag = load_dag(runner, monkeypatch)
+def test_dag_structure():
+    dag = load_dag()
     upstream = {t.task_id: sorted(t.upstream_task_ids) for t in dag.tasks}
     assert upstream == {
         "acquire": [],
@@ -224,13 +212,20 @@ def test_dag_structure(runner, operator, monkeypatch):
         "publish": ["anomalies", "bias", "embeddings", "validate"],
     }
     for t in dag.tasks:
-        assert type(t).__name__ == operator
+        assert type(t).__name__ == "KubernetesPodOperator"
         assert t.retries == 2
     assert dag.max_active_runs == 1 and dag.catchup is False
 
 
-def test_k8s_tasks_pass_params_as_separate_args(monkeypatch):
-    dag = load_dag("k8s", monkeypatch)
+def test_freeze_dag_runs_one_pod():
+    dag = load_dag("ctt_freeze_baseline")
+    (task,) = dag.tasks
+    assert task.arguments[:2] == ["freeze", "--reason"]
+    assert dag.schedule_interval is None
+
+
+def test_tasks_pass_params_as_separate_args():
+    dag = load_dag()
     args = dag.get_task("acquire").arguments
     assert args[0] == "acquire" and args.count("--param") == 4
     assert not any("'" in a for a in args)  # no shell quoting reaches the pod

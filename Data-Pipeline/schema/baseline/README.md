@@ -13,7 +13,7 @@ task downloads it into this folder before running, so `validate` compares
 each snapshot with it. Freeze one after a run on a snapshot you trust:
 
 ```bash
-REASON="first real AACT snapshot" ./gce/vm.sh freeze
+REASON="first real AACT snapshot" ./composer/deploy.sh freeze
 ```
 
 Until a baseline exists, `validate` checks each snapshot against its own

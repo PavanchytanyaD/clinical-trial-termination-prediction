@@ -21,7 +21,7 @@ The data pipeline runs every month: it fetches an AACT snapshot, builds the feat
                +--> text --> embeddings (Vertex AI GPU) -----------+
 ```
 
-It runs entirely on Google Cloud (project `ctt-mlops-project`): Airflow on a Compute Engine VM for everyday runs or on Cloud Composer, every data version in a GCS bucket through DVC, container images in Artifact Registry, and the embeddings on a Vertex AI T4 GPU. See [Data-Pipeline/README.md](Data-Pipeline/README.md#run-it-on-google-cloud).
+It runs entirely on Google Cloud (project `ctt-mlops-project`): GitHub Actions tests every push and builds the container images into Artifact Registry, Cloud Composer orchestrates and runs each step as a pod from that image, every data version is kept in a GCS bucket through DVC, and the embeddings run as a Vertex AI T4 GPU job. See [Data-Pipeline/README.md](Data-Pipeline/README.md#run-it-on-google-cloud).
 
 | Guideline item | Where | Owner |
 |---|---|---|
@@ -35,25 +35,25 @@ It runs entirely on Google Cloud (project `ctt-mlops-project`): Airflow on a Com
 | 8. Anomaly detection and alerts | `Data-Pipeline/scripts/anomalies.py` | Pavanchytanya |
 | 9. Pipeline flow optimization | `Data-Pipeline/docs/pipeline_optimization.md` | Pavanchytanya |
 | Text and BioBERT embeddings stages | `src/features/build_text_sample.py`, `biobert_embeddings.py` (Nithish); `Data-Pipeline/scripts/text.py`, `embeddings.py`, Vertex AI job (Pavanchytanya) | Nithish, Pavanchytanya |
-| Cloud hosting | `Data-Pipeline/gce/`, `composer/`, `docker/` | Pavanchytanya |
+| Cloud hosting and CI/CD | `.github/workflows/ci.yml`, `Data-Pipeline/composer/`, `docker/` | Pavanchytanya |
 | Bias detection and slicing | `src/bias/slicing.py`, `slice_report.py`, `model_slices.py` | Danush, Atharva |
 | Bias mitigation and report | `src/bias/mitigate.py`, `docs/bias_report.md` | Atharva, Danush |
 | Error handling, code style, contributing | `src/error_handling.py`, `.flake8`, `CONTRIBUTING.md` | Sathyasai |
 
-Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md); the VM is in [Data-Pipeline/gce/vm.sh](Data-Pipeline/gce/vm.sh) and Cloud Composer in [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
+Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md); CI is in [.github/workflows/ci.yml](.github/workflows/ci.yml) and Cloud Composer in [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
 
 ## Code structure
 
 ```
 clinical-trial-termination-prediction/
+|- .github/workflows/ci.yml  CI/CD: tests on every push, then images -> Artifact Registry
 |- Data-Pipeline/            the data pipeline (folder layout from the assignment guidelines)
 |  |- dags/                  Airflow DAG
 |  |- scripts/               one module per stage, plus tracking, alerts and the DVC stage runner
 |  |- tests/                 tests for the pipeline stages, DAG and DVC runner
 |  |- schema/baseline/       how the validation baseline (kept in GCS) is frozen
 |  |- docs/                  pipeline optimization note and Gantt charts
-|  |- gce/                   Airflow on a Compute Engine VM (vm.sh, run_task.sh, airflow/)
-|  |- composer/              Cloud Composer deployment and image builds
+|  |- composer/              Cloud Composer: setup, up, trigger, down; image builds
 |  |- docker/                pipeline image (Composer pods), BioBERT GPU image (Vertex AI)
 |  |- dvc.yaml, params.yaml  DVC stages and their parameters
 |  \- README.md
@@ -78,30 +78,29 @@ Everything runs in the Google Cloud project `ctt-mlops-project`; you need a Goog
 git clone https://github.com/PavanchytanyaD/clinical-trial-termination-prediction.git
 cd clinical-trial-termination-prediction/Data-Pipeline
 gcloud auth login && gcloud config set project ctt-mlops-project
-./composer/deploy.sh image       # pipeline image -> Artifact Registry
-./composer/deploy.sh gpu-image   # BioBERT GPU image -> Artifact Registry
+./composer/deploy.sh setup       # once per project: APIs, bucket, roles
 cp .env.example .env             # AACT account and SMTP settings (never committed)
 ```
 
 ## Run the pipeline
 
+Code reaches the pipeline through GitHub: every push runs the style check and all tests, and pushes to `main` or `pavan/integration` then build the images Composer and Vertex AI run.
+
 ```bash
-./gce/vm.sh create      # the Airflow VM, once (about 10 minutes)
-./gce/vm.sh secrets     # copies .env to the VM
-./gce/vm.sh trigger     # one run on the seeded test snapshot
-SOURCE=db ./gce/vm.sh trigger   # one run on the live AACT database
-./gce/vm.sh ui          # Airflow web UI through an SSH tunnel
-./gce/vm.sh stop        # stop the VM when idle
+./composer/deploy.sh up          # create Composer (about 25 min), restore its history
+./composer/deploy.sh trigger     # one run on the seeded test snapshot
+SOURCE=db ./composer/deploy.sh trigger   # one run on the live AACT database
+./composer/deploy.sh down        # save Airflow's history, delete Composer (billing stops)
 ```
 
-Without AACT credentials the pipeline runs on a seeded test snapshot in the AACT format, so every step can be exercised. Cloud Composer runs the same DAG, one pod per task ([Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md)).
+Without AACT credentials the pipeline runs on a seeded test snapshot in the AACT format, so every step can be exercised. Details: [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
 
 ## Data versioning and reproducibility
 
 - `Data-Pipeline/dvc.yaml` declares each stage's code, inputs, parameters and outputs. `dvc.lock` stores the md5 of every output, so each run's `dvc.lock` is one exact data version; the data itself is in the DVC remote `gs://ctt-mlops-project-data/dvc-store`.
 - Every run writes its `dvc.lock` and a version record to `gs://ctt-mlops-project-data/data-pipeline/state/versions/<snapshot>/`, so the exact data of any run can be pulled again.
 - The test snapshot is seeded, so the same parameters give the same data and the same `dvc.lock` hashes.
-- Rebuilding from scratch: clone, build the two images, `./gce/vm.sh create`, trigger.
+- Rebuilding from scratch: clone, push (CI builds the images), `./composer/deploy.sh setup` and `up`, trigger.
 
 ## Tests
 
