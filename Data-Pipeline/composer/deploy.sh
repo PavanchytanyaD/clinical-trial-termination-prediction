@@ -9,7 +9,8 @@
 #
 # Once per project:
 #   setup      enable the APIs, create the bucket, give pipeline-sa (the
-#              environment's identity) the Composer roles
+#              environment's identity) the Composer roles and cicd-sa (CI)
+#              its build roles
 #
 # Images (CI builds them on every push; by hand only when needed):
 #   image      pipeline image (Composer pods) -> Artifact Registry
@@ -50,12 +51,20 @@ env_flags() { echo --environment "${ENV_NAME}" --location "${REGION}"; }
 
 # Build Data-Pipeline/docker/<dockerfile> with Cloud Build (repository root as
 # context: src/ + Data-Pipeline/) and push it as :latest (and :$TAG).
+# It builds the committed code (git archive HEAD). The archive goes to our own
+# bucket and the build's first step fetches it, so CI needs no rights on Cloud
+# Build's default source bucket (gcloud would try to create that bucket).
 cloud_build() {
   gc artifacts repositories describe "${REPO}" --location "${REGION}" \
       >/dev/null 2>&1 \
     || gc artifacts repositories create "${REPO}" --location "${REGION}" \
          --repository-format docker
-  # build config, removed after the build
+  # source archive and build config, both removed after the build
+  local archive src
+  archive="$(mktemp)"
+  src="gs://${BUCKET}/cloudbuild-source/$(date -u +%Y%m%dT%H%M%S)-$$-$1.tgz"
+  git -C "${REPO_ROOT}" archive --format=tar.gz -o "${archive}" HEAD
+  gc storage cp "${archive}" "${src}" --quiet
   config="$(mktemp)"
   local tags="\"-t\", \"$2:latest\""
   local images="\"$2:latest\""
@@ -65,6 +74,10 @@ cloud_build() {
   fi
   cat > "${config}" <<EOF
 steps:
+  - name: gcr.io/cloud-builders/gsutil
+    args: ["cp", "${src}", "/workspace/source.tgz"]
+  - name: ubuntu
+    args: ["bash", "-c", "tar -xzf source.tgz && rm source.tgz"]
   - name: gcr.io/cloud-builders/docker
     env: ["DOCKER_BUILDKIT=1"]
     args: ["build", "-f", "Data-Pipeline/docker/$1", ${tags}, "."]
@@ -76,8 +89,11 @@ options:
   machineType: ${3:-UNSPECIFIED}
   logging: CLOUD_LOGGING_ONLY
 EOF
-  gc builds submit "${REPO_ROOT}" --config "${config}"
-  rm -f "${config}"
+  local rc=0
+  gc builds submit --no-source --config "${config}" || rc=$?
+  gc storage rm "${src}" --quiet || true
+  rm -f "${config}" "${archive}"
+  return "${rc}"
 }
 
 secret_args() {
@@ -108,6 +124,15 @@ step() {
       gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
         --member "serviceAccount:service-${number}@cloudcomposer-accounts.iam.gserviceaccount.com" \
         --role roles/composer.ServiceAgentV2Ext --format=none
+      # CI (GitHub Actions, signed in as BUILD_SA through the team's Workload
+      # Identity pool): submit builds, stage the source in our bucket, push
+      # images, and upload the DAG when Composer is up
+      for role in roles/cloudbuild.builds.editor roles/artifactregistry.writer \
+          roles/logging.logWriter roles/serviceusage.serviceUsageConsumer \
+          roles/storage.objectAdmin roles/composer.user; do
+        gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
+          --member "serviceAccount:${BUILD_SA}" --role "${role}" --format=none
+      done
       ;;
     image)
       cloud_build Dockerfile "${IMAGE}"
