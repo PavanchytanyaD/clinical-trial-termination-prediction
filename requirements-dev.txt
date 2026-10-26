@@ -1,0 +1,5 @@
+# Development tools for code style and tests. Install with:
+#   pip install -r requirements-dev.txt
+black==24.10.0
+flake8==7.1.1
+pytest==9.0.2  # same pin as requirements.txt

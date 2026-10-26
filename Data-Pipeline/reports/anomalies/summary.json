@@ -1,0 +1,8 @@
+{
+  "checked_at": "2026-10-25T12:44:29+00:00",
+  "rows": 500,
+  "critical": 0,
+  "warning": 0,
+  "worst": null,
+  "stop_pipeline": false
+}

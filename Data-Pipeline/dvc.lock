@@ -1,0 +1,274 @@
+schema: '2.0'
+stages:
+  acquire:
+    cmd: python -m scripts.acquire
+    deps:
+    - path: ../src/error_handling.py
+      hash: md5
+      md5: 578c12c284ebe8cfdaff26abb55e1f30
+      size: 3426
+    - path: ../src/ingestion/fetch_aact.py
+      hash: md5
+      md5: 74b91d866f76be90ae9e3b2f66c0288e
+      size: 8366
+    - path: ../src/logging_utils.py
+      hash: md5
+      md5: 747e4807060236bfb619a939ae794c10
+      size: 858
+    - path: scripts/acquire.py
+      hash: md5
+      md5: e3b2c50fa8b6a28c169950e53095c39e
+      size: 3828
+    - path: scripts/sample_snapshot.py
+      hash: md5
+      md5: 9fcc932079e82e69c9d0932f6d185dc0
+      size: 10919
+    params:
+      params.yaml:
+        acquire:
+          source: sample
+          zip: ''
+          snapshot: '20261001'
+          sample_trials: 500
+          seed: 42
+    outs:
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      size: 678731
+      nfiles: 13
+  preprocess:
+    cmd: python -m scripts.preprocess
+    deps:
+    - path: ../src/features/build_text_sample.py
+      hash: md5
+      md5: ab02064eb384828466fc4e2da1cf64a4
+      size: 8241
+    - path: ../src/features/structured_features.py
+      hash: md5
+      md5: 5f68d72469e1bcdaab32491df0e97981
+      size: 16904
+    - path: ../src/features/text_cleaning.py
+      hash: md5
+      md5: c02b16e4f490fb0130d9952c38b98f24
+      size: 3655
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/preprocess.py
+      hash: md5
+      md5: 85c7025f6f86fe52bb5f5642a12d70c3
+      size: 6779
+    params:
+      params.yaml:
+        preprocess:
+          mode: auto
+    outs:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: data/processed/structured_features.meta.json
+      hash: md5
+      md5: b4f1e0e2544b23d2d6140913adb9ce1b
+      size: 7013
+  schema_stats:
+    cmd: python -m scripts.schema_stats
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: scripts/schema_stats.py
+      hash: md5
+      md5: 3c95ad1bac9b7ed993314fdab1ecd744
+      size: 14345
+    params:
+      params.yaml:
+        schema:
+          min_rows: 100
+          range_slack: 0.5
+          mostly: 0.99
+          max_missing_increase: 0.05
+          categorical_max_distinct: 50
+    outs:
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 1e8bfd8eaf823a931ef7cbd0a8275f29
+      size: 48072
+    - path: reports/statistics/statistics.md
+      hash: md5
+      md5: 85e224222f06f5c497c15a94710cd78c
+      size: 10818
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 6c5c1fe7c2115b6dbcd6d66a236d7072
+      size: 152435
+  validate:
+    cmd: python -m scripts.validate
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 1e8bfd8eaf823a931ef7cbd0a8275f29
+      size: 48072
+    - path: schema/baseline
+      hash: md5
+      md5: c8baf21055ed1231a003235988f72377.dir
+      size: 648
+      nfiles: 1
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 6c5c1fe7c2115b6dbcd6d66a236d7072
+      size: 152435
+    - path: scripts/validate.py
+      hash: md5
+      md5: ac89e61084f9a5f4467ce322d5184a7e
+      size: 12576
+    params:
+      params.yaml:
+        validate:
+          fail_on: critical
+          alert_on: warning
+          max_row_change: 0.5
+          max_stopped_rate_change: 0.05
+          max_missing_increase: 0.05
+          max_mean_shift_std: 0.5
+    outs:
+    - path: reports/validation/summary.json
+      hash: md5
+      md5: b95c855b2cf5a0d759f8e5a909ba5799
+      size: 257
+    - path: reports/validation/validation.json
+      hash: md5
+      md5: 69820bd95f5a84b10132ae8446e10fea
+      size: 216060
+    - path: reports/validation/validation.md
+      hash: md5
+      md5: 7193e0336dd11886cc549ca6941a157d
+      size: 192
+  bias:
+    cmd: python -m scripts.bias
+    deps:
+    - path: ../configs/bias_config.yaml
+      hash: md5
+      md5: cefae6b2b73c44702b694c9e82ee4540
+      size: 2740
+    - path: ../src/bias/load_data.py
+      hash: md5
+      md5: 67cfa3bfe6722af1d8baabd067305b30
+      size: 7070
+    - path: ../src/bias/mitigate.py
+      hash: md5
+      md5: 28d53e1ed6d8fdfbc55ae9c7569c2eee
+      size: 8815
+    - path: ../src/bias/model_slices.py
+      hash: md5
+      md5: a46f68b10e55bcab56ef28e7b1999b0b
+      size: 2767
+    - path: ../src/bias/run_bias_detection.py
+      hash: md5
+      md5: e9dfcd3f7a91d785a3db2537858a6135
+      size: 4023
+    - path: ../src/bias/run_bias_mitigation.py
+      hash: md5
+      md5: 43722ddd4f951369e71ab9a0a59dc1b3
+      size: 6950
+    - path: ../src/bias/slice_report.py
+      hash: md5
+      md5: 5ae8e75b71f8420399dbef840b8b21f6
+      size: 2663
+    - path: ../src/bias/slicing.py
+      hash: md5
+      md5: fc6829c2b1c567e6a8caab948fcd1b31
+      size: 3993
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/bias.py
+      hash: md5
+      md5: e87d4f1df3e92abfa965a4c65d09f399
+      size: 2847
+    params:
+      params.yaml:
+        bias:
+          mitigation_method: reweight
+    outs:
+    - path: data/processed/trial_slices.csv
+      hash: md5
+      md5: 772865a1f280a6d1f201703f680eb616
+      size: 58412
+    - path: reports/bias
+      hash: md5
+      md5: 4e706a93c1b0f18a41a06e4f1d7f73bd.dir
+      size: 15057
+      nfiles: 5
+  anomalies:
+    cmd: python -m scripts.anomalies
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: scripts/anomalies.py
+      hash: md5
+      md5: 1d65465d2003dafdfba3b39af71f9032
+      size: 11113
+    params:
+      params.yaml:
+        anomalies:
+          fail_on: critical
+          alert_on: warning
+          max_missing_rate: 0.3
+          max_outlier_share: 0.05
+          iqr_k: 3.0
+          max_invalid_date_share: 0.01
+    outs:
+    - path: reports/anomalies/anomalies.json
+      hash: md5
+      md5: 187601704c15c78cccf5ed0dc70bf8ef
+      size: 187
+    - path: reports/anomalies/anomalies.md
+      hash: md5
+      md5: 5865d6c5a09d59fbb4d4cab54076c2ce
+      size: 94
+    - path: reports/anomalies/summary.json
+      hash: md5
+      md5: b49dd2c9a302d195cac7afdc61e87210
+      size: 138
+  text:
+    cmd: python -m scripts.text
+    deps:
+    - path: ../src/features/build_text_sample.py
+      hash: md5
+      md5: ab02064eb384828466fc4e2da1cf64a4
+      size: 8241
+    - path: ../src/features/text_cleaning.py
+      hash: md5
+      md5: c02b16e4f490fb0130d9952c38b98f24
+      size: 3655
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/text.py
+      hash: md5
+      md5: f3b423b2f8cf42a7f717b1da915b55a3
+      size: 1554
+    outs:
+    - path: data/processed/text_all.jsonl
+      hash: md5
+      md5: db07594d30f1abd3198118fd95bac1ee
+      size: 357970
+    - path: data/processed/text_all.meta.json
+      hash: md5
+      md5: 59c3121cdb8a896e7361f8774f9e37c8
+      size: 537

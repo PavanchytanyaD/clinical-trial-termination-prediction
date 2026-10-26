@@ -1,0 +1,72 @@
+# Cloud Composer
+
+The pipeline runs on Cloud Composer 3 in the `ctt-mlops` project (project ID
+`ctt-mlops-project`). Composer only orchestrates: each task is a Kubernetes
+pod started from the pipeline image in Artifact Registry, which GitHub
+Actions builds on every push (`../../.github/workflows/ci.yml`), and the
+`embeddings` task hands BioBERT to a Vertex AI GPU job.
+
+**Cost:** a Composer environment is billed every hour it exists, even when no
+DAG runs, and it cannot be paused. So it is created for a working session
+and deleted afterwards. The data, the run state and a snapshot of Airflow's
+own history stay in the bucket, and `up` restores them.
+
+## Once per project
+
+```bash
+gcloud auth login && gcloud config set project ctt-mlops-project
+./composer/deploy.sh setup
+```
+
+`setup` enables the APIs, creates the bucket if missing, and gives
+`pipeline-sa` (the identity of Composer and its pods: Storage, Vertex AI,
+Logging) the Composer worker role, plus the role Composer's own service
+agent needs to act as it.
+
+## A working session
+
+From the `Data-Pipeline` folder:
+
+```bash
+export ALERT_EMAILS=<a@x.com,b@y.com>   # optional: failure emails
+./composer/deploy.sh up        # create (about 25 min), restore history,
+                               # settings, AACT/SMTP secret, upload the DAGs
+./composer/deploy.sh trigger   # SNAPSHOT=20261101 SOURCE=db ... to choose
+./composer/deploy.sh ui        # the Airflow web UI address
+./composer/deploy.sh down      # snapshot Airflow's history, then delete
+```
+
+`up` is the single steps `env`, `secret`, `config` and `dag`; each can also
+be run on its own. The images are built by CI; `./composer/deploy.sh image`
+and `gpu-image` build them by hand if needed (as `cicd-sa`, through Cloud
+Build).
+
+## DAG settings (environment variables)
+
+| Variable | Value |
+|---|---|
+| `CTT_IMAGE` | `us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest` (CI pushes it) |
+| `CTT_STATE_URI` | `gs://ctt-mlops-project-data/data-pipeline/state` |
+| `CTT_ALERT_EMAILS` | failure-email recipients |
+| `CTT_SMTP_SECRET` | `ctt-pipeline-secrets` (SMTP / ALERT / AACT keys), empty if `.env` has none |
+| `CTT_SOURCE` | default `acquire.source`: `sample`, `zip` or `db` |
+
+Airflow's own failure emails also need an email backend on the environment
+(Composer's SendGrid integration, or Airflow SMTP settings). Without it the
+validation alerts sent from the pods still work, through the SMTP secret.
+
+## What ends up in the bucket
+
+```
+gs://ctt-mlops-project-data/
+|- dvc-store/                       DVC remote: every data version
+|- composer-snapshots/              Airflow's history, saved by down
+|- data-pipeline/state/
+   |- dvc.lock                      latest successful stage outputs
+   |- baseline/                     validation baseline (deploy.sh freeze)
+   |- runs/<run_id>/params.yaml     parameters of that run
+   |- runs/<run_id>/<stage>/logs/   step logs and run records
+   |- runs/<run_id>/<stage>/reports/  statistics and validation reports
+   |- versions/<snapshot>/dvc.lock  data version per snapshot
+   |- versions/<snapshot>/<run_id>.json
+```

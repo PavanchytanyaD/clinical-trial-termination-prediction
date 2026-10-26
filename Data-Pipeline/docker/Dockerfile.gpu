@@ -1,0 +1,31 @@
+# Image the Vertex AI custom job runs for the embeddings stage
+# (scripts/embeddings.py, backend vertex) on a T4 GPU. Build from the
+# repository root:
+#
+#   docker build -f Data-Pipeline/docker/Dockerfile.gpu -t biobert-gpu .
+#
+# or with Cloud Build: ./composer/deploy.sh gpu-image
+# The BioBERT weights are downloaded at build time, so a job does not depend
+# on Hugging Face being reachable.
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/opt/hf
+
+WORKDIR /opt/ctt
+COPY Data-Pipeline/docker/requirements-gpu.txt /tmp/requirements-gpu.txt
+RUN pip install -r /tmp/requirements-gpu.txt
+
+ARG MODEL=dmis-lab/biobert-base-cased-v1.2
+RUN python -c "from transformers import AutoModel, AutoTokenizer; \
+AutoTokenizer.from_pretrained('${MODEL}'); AutoModel.from_pretrained('${MODEL}')"
+ENV HF_HUB_OFFLINE=1
+
+COPY src/ src/
+COPY Data-Pipeline/scripts/ Data-Pipeline/scripts/
+COPY Data-Pipeline/params.yaml Data-Pipeline/params.yaml
+
+WORKDIR /opt/ctt/Data-Pipeline
+CMD ["python", "-m", "scripts.embeddings", "--help"]

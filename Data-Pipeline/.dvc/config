@@ -1,0 +1,6 @@
+[core]
+    analytics = false
+    remote = gcs
+['remote "gcs"']
+    url = gs://ctt-mlops-project-data/dvc-store
+    projectname = ctt-mlops-project

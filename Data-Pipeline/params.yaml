@@ -1,0 +1,57 @@
+# Parameters for the DVC stages. A change here re-runs the stages that use
+# that section. The Airflow DAG overrides acquire.snapshot (and optionally
+# acquire.source) per run with --param.
+
+acquire:
+  # sample: placeholder synthetic snapshot (no AACT account needed)
+  # zip:    AACT monthly flat-file export (path or URL in `zip`)
+  # db:     AACT cloud PostgreSQL (AACT_USER / AACT_PASSWORD env vars)
+  source: sample
+  zip: ""
+  snapshot: "20261001"
+  sample_trials: 500
+  seed: 42
+
+preprocess:
+  # auto: src/features/structured_features.py if present, else placeholder
+  mode: auto
+
+bias:
+  # settings live in configs/bias_config.yaml (Tasks 4 and 5); this only
+  # picks the mitigation: reweight or resample
+  mitigation_method: reweight
+
+anomalies:
+  fail_on: critical           # stop the pipeline on: critical | warning | never
+  alert_on: warning           # email on: critical | warning | never
+  max_missing_rate: 0.3       # warn when a column is missing for > 30% of trials
+  max_outlier_share: 0.05     # warn when > 5% of a column's values are outliers
+  iqr_k: 3.0                  # outlier = outside [Q1 - k IQR, Q3 + k IQR]
+  max_invalid_date_share: 0.01
+
+schema:
+  min_rows: 100               # fewer rows than this is a critical failure
+  range_slack: 0.5            # numeric max can grow 50% before a warning
+  mostly: 0.99                # share of rows that must pass a warning check
+  max_missing_increase: 0.05  # allowed rise in a column's missing rate
+  categorical_max_distinct: 50
+
+validate:
+  fail_on: critical           # stop the pipeline on: critical | warning | never
+  alert_on: warning           # email on: critical | warning | never
+  max_row_change: 0.5         # vs baseline row count
+  max_stopped_rate_change: 0.05
+  max_missing_increase: 0.05
+  max_mean_shift_std: 0.5     # numeric mean shift, in baseline std units
+
+embeddings:
+  # Vertex AI custom job on a T4 GPU (image biobert-gpu, built with
+  # ./composer/deploy.sh gpu-image); the result comes back to the stage
+  max_trials: 0               # embed only the first N trials (0 = all)
+  model: dmis-lab/biobert-base-cased-v1.2
+  batch_size: 32
+  max_length: 512             # tokens per window
+  stride: 64                  # tokens shared by consecutive windows
+  machine_type: n1-standard-8
+  accelerator: NVIDIA_TESLA_T4
+  timeout_hours: 8

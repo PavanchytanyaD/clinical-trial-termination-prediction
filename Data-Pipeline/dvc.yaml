@@ -1,0 +1,126 @@
+# Data pipeline stages. The Airflow DAG (dags/ctt_data_pipeline.py) runs
+# them one task each, through scripts/run_stage.py, which skips a stage whose
+# code, inputs and params did not change. dvc.lock records the md5 of every
+# output; the data itself goes to the GCS remote.
+#
+# Paths starting with ../ are the team's shared code in src/ and configs/ at
+# the repository root: changing that code re-runs the stages that use it.
+# They are listed file by file, not as folders, because DVC would otherwise
+# also hash the __pycache__ folders Python writes there. Add a file here when
+# a stage starts importing it.
+#
+#   acquire --+--> preprocess --+--> schema_stats --> validate
+#             |                 +--> anomalies
+#             +--> bias
+#             +--> text --> embeddings   (BioBERT, on a Vertex AI GPU)
+stages:
+  acquire:
+    cmd: python -m scripts.acquire
+    deps:
+      - scripts/acquire.py
+      - scripts/sample_snapshot.py
+      - ../src/ingestion/fetch_aact.py
+      - ../src/error_handling.py
+      - ../src/logging_utils.py
+    params:
+      - acquire
+    outs:
+      - data/raw/aact_snapshot
+
+  preprocess:
+    cmd: python -m scripts.preprocess
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/preprocess.py
+      - ../src/features/structured_features.py
+      - ../src/features/build_text_sample.py
+      - ../src/features/text_cleaning.py
+    params:
+      - preprocess
+    outs:
+      - data/processed/structured_features.csv
+      - data/processed/structured_features.meta.json
+
+  bias:
+    cmd: python -m scripts.bias
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/bias.py
+      - ../src/bias/load_data.py
+      - ../src/bias/slicing.py
+      - ../src/bias/slice_report.py
+      - ../src/bias/model_slices.py
+      - ../src/bias/mitigate.py
+      - ../src/bias/run_bias_detection.py
+      - ../src/bias/run_bias_mitigation.py
+      - ../configs/bias_config.yaml
+    params:
+      - bias
+    outs:
+      - data/processed/trial_slices.csv
+      - reports/bias
+
+  schema_stats:
+    cmd: python -m scripts.schema_stats
+    deps:
+      - data/processed/structured_features.csv
+      - scripts/schema_stats.py
+    params:
+      - schema
+    outs:
+      - schema/generated/expectation_suite.json
+      - reports/statistics/statistics.json
+      - reports/statistics/statistics.md
+
+  anomalies:
+    cmd: python -m scripts.anomalies
+    deps:
+      - data/processed/structured_features.csv
+      - scripts/anomalies.py
+    params:
+      - anomalies
+    outs:
+      - reports/anomalies/anomalies.json
+      - reports/anomalies/anomalies.md
+    metrics:
+      - reports/anomalies/summary.json:
+          cache: false
+
+  validate:
+    cmd: python -m scripts.validate
+    deps:
+      - data/processed/structured_features.csv
+      - reports/statistics/statistics.json
+      - schema/generated/expectation_suite.json
+      - schema/baseline
+      - scripts/validate.py
+    params:
+      - validate
+    outs:
+      - reports/validation/validation.json
+      - reports/validation/validation.md
+    metrics:
+      - reports/validation/summary.json:
+          cache: false
+
+  text:
+    cmd: python -m scripts.text
+    deps:
+      - data/raw/aact_snapshot
+      - scripts/text.py
+      - ../src/features/build_text_sample.py
+      - ../src/features/text_cleaning.py
+    outs:
+      - data/processed/text_all.jsonl
+      - data/processed/text_all.meta.json
+
+  embeddings:
+    cmd: python -m scripts.embeddings
+    deps:
+      - data/processed/text_all.jsonl
+      - scripts/embeddings.py
+      - ../src/features/biobert_embeddings.py
+    params:
+      - embeddings
+    outs:
+      - data/processed/embeddings
