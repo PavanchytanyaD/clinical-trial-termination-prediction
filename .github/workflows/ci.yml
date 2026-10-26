@@ -118,9 +118,13 @@ jobs:
           service_account: ${{ env.CICD_SA }}
       - uses: google-github-actions/setup-gcloud@v2
       - run: |
-          if gcloud composer environments describe ctt-composer \
-               --location us-central1 --project "${GCP_PROJECT}" >/dev/null 2>&1; then
+          # only a RUNNING environment has a DAG bucket (not one being
+          # created or deleted)
+          state="$(gcloud composer environments describe ctt-composer \
+                     --location us-central1 --project "${GCP_PROJECT}" \
+                     --format='value(state)' 2>/dev/null || true)"
+          if [ "${state}" = "RUNNING" ]; then
             ./Data-Pipeline/composer/deploy.sh dag
           else
-            echo "Composer is not up; the DAG is uploaded by deploy.sh up"
+            echo "Composer is not running (${state:-absent}); deploy.sh up uploads the DAG"
           fi
