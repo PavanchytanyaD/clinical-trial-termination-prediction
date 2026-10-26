@@ -6,7 +6,8 @@ import requests
 from src.error_handling import DataUnavailableError
 from src.ingestion import fetch_aact
 from src.ingestion.fetch_aact import (
-    download, export_from_db, extract_tables, snapshot_name, validate,
+    download, export_from_db, extract_tables, snapshot_name, trial_filter,
+    validate,
 )
 
 TABLES = ["studies", "eligibilities"]
@@ -108,3 +109,17 @@ def test_db_export_needs_credentials(tmp_path, monkeypatch):
     monkeypatch.delenv("AACT_PASSWORD", raising=False)
     with pytest.raises(RuntimeError, match="AACT_USER"):
         export_from_db(tmp_path)
+
+
+def test_trial_filter_builds_one_condition_per_bound():
+    where, args = trial_filter("2019-01-01", "2019-12-31", ["interventional"])
+    assert where == ("study_first_submitted_date >= %s AND "
+                     "study_first_submitted_date <= %s AND "
+                     "study_type = ANY(%s)")
+    assert args == ["2019-01-01", "2019-12-31", ["INTERVENTIONAL"]]
+
+
+def test_no_trial_filter_means_every_trial():
+    assert trial_filter() == (None, [])
+    assert trial_filter(registered_from="2017-01-01") == (
+        "study_first_submitted_date >= %s", ["2017-01-01"])

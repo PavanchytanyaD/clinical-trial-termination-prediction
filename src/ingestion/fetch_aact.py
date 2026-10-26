@@ -102,9 +102,34 @@ def extract_tables(zip_path, out_dir, tables=REQUIRED_TABLES):
             logger.info("extracted %s", t)
 
 
+def trial_filter(registered_from=None, registered_to=None, study_types=None):
+    """SQL condition on ctgov.studies selecting the trials to export, and its
+    parameters: registration date (study_first_submitted_date) within
+    [registered_from, registered_to] and study_type in study_types. Each
+    bound is optional; (None, []) means every trial."""
+    conds, args = [], []
+    if registered_from:
+        conds.append("study_first_submitted_date >= %s")
+        args.append(str(registered_from))
+    if registered_to:
+        conds.append("study_first_submitted_date <= %s")
+        args.append(str(registered_to))
+    if study_types:
+        conds.append("study_type = ANY(%s)")
+        args.append([str(t).upper() for t in study_types])
+    return (" AND ".join(conds) or None), args
+
+
 def export_from_db(out_dir, tables=REQUIRED_TABLES, user=None,
-                   password=None, host=AACT_HOST, port=AACT_PORT):
-    """Export each table from the AACT database in the flat-file format."""
+                   password=None, host=AACT_HOST, port=AACT_PORT,
+                   registered_from=None, registered_to=None,
+                   study_types=None):
+    """Export each table from the AACT database in the flat-file format.
+
+    registered_from / registered_to (YYYY-MM-DD) and study_types limit the
+    export to those trials (trial_filter); the other tables keep only rows
+    of those trials.
+    """
     user = user or os.environ.get("AACT_USER")
     password = password or os.environ.get("AACT_PASSWORD")
     if not user or not password:
@@ -125,10 +150,20 @@ def export_from_db(out_dir, tables=REQUIRED_TABLES, user=None,
     except psycopg2.OperationalError as e:
         raise DataUnavailableError(
             f"could not connect to the AACT database at {host}: {e}") from e
+    where, args = trial_filter(registered_from, registered_to, study_types)
+    if where:
+        logger.info("exporting trials where %s %s", where, args)
     try:
         with conn, conn.cursor() as cur:
             for t in tables:  # names come from REQUIRED_TABLES only
-                sql = (f"COPY (SELECT * FROM ctgov.{t}) TO STDOUT "
+                select = f"SELECT * FROM ctgov.{t}"
+                if where:
+                    select += (f" WHERE {where}" if t == "studies" else
+                               " WHERE nct_id IN (SELECT nct_id FROM "
+                               f"ctgov.studies WHERE {where})")
+                    # COPY takes no bind parameters: let psycopg2 quote them
+                    select = cur.mogrify(select, args).decode()
+                sql = (f"COPY ({select}) TO STDOUT "
                        "WITH (FORMAT csv, HEADER, DELIMITER '|')")
                 path = out_dir / f"{t}.txt"
                 with open(path, "w", encoding="utf-8", newline="") as f:
