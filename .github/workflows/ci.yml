@@ -1,0 +1,126 @@
+# CI/CD for the data pipeline.
+#
+# Every push and pull request: style check and the three test suites.
+# Pushes to main and pavan/integration, once everything passed: build the two
+# images with Cloud Build into Artifact Registry (tagged :latest and with the
+# commit), and if a Composer environment is up, upload the new DAG to it.
+#
+# Google Cloud sign-in uses Workload Identity Federation: GitHub's OIDC token
+# is exchanged for the cicd-sa service account, so no key is stored here.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  GCP_PROJECT: ctt-mlops-project
+  WIF_PROVIDER: projects/431597074609/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  CICD_SA: cicd-sa@ctt-mlops-project.iam.gserviceaccount.com
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: flake8 src tests Data-Pipeline/scripts Data-Pipeline/tests Data-Pipeline/dags
+
+  test-src:
+    name: test src/ (team code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # the CPU build of torch: the tests build a tiny model, no GPU needed
+      - run: pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt -r requirements-bias.txt -r requirements-dev.txt
+      - run: pytest tests
+
+  test-pipeline:
+    name: test Data-Pipeline/ (stages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r Data-Pipeline/requirements.txt
+      - run: pytest
+        working-directory: Data-Pipeline
+
+  test-dag:
+    name: test the Airflow DAGs
+    runs-on: ubuntu-latest
+    env:
+      AIRFLOW_HOME: ${{ github.workspace }}/.airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # the same Airflow version as Composer 3 (composer-3-airflow-2.10.5)
+      - run: >
+          pip install "apache-airflow==2.10.5" apache-airflow-providers-cncf-kubernetes pytest
+          --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt
+      - run: airflow db migrate
+      - run: pytest tests/test_orchestration.py
+        working-directory: Data-Pipeline
+
+  build:
+    name: build images
+    needs: [lint, test-src, test-pipeline, test-dag]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pavan/integration')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # for Workload Identity Federation
+    strategy:
+      matrix:
+        image: [image, gpu-image]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CICD_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: TAG="${GITHUB_SHA::7}" ./Data-Pipeline/composer/deploy.sh ${{ matrix.image }}
+
+  deploy-dag:
+    name: update the DAG on Composer (if it is up)
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CICD_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: |
+          if gcloud composer environments describe ctt-composer \
+               --location us-central1 --project "${GCP_PROJECT}" >/dev/null 2>&1; then
+            ./Data-Pipeline/composer/deploy.sh dag
+          else
+            echo "Composer is not up; the DAG is uploaded by deploy.sh up"
+          fi
