@@ -86,6 +86,11 @@ the feature, bias and check work costs no extra time.
 
 ![Parallel branches](images/gantt_parallel_branches.png)
 
+`bias_model` (the baseline model and its per-group check) was added after
+these measurements. It needs only the features and the bias stage's
+output, so it runs next to `schema_stats` and `anomalies`, inside the GPU
+job's window, and does not lengthen the run.
+
 ## Notes for the real AACT data
 
 - On the full AACT export (about 500,000 trials) `preprocess`, `bias` and

@@ -2,6 +2,15 @@
 
 Covers guideline section 3 (Data Bias Detection Using Data Slicing).
 Parts 1–2 (detection and slicing): Danush. Parts 3–4 (mitigation and documentation): Atharva.
+Section 7 (model-level check with a baseline model): Pavanchytanya.
+
+Bias is checked twice in every pipeline run:
+
+1. **Data level** (stage `bias`, sections 1–6): how many finished trials each group has and how
+   often they stop; small groups are reweighted.
+2. **Model level** (stage `bias_model`, section 7): a baseline model is trained and evaluated per
+   group with Fairlearn, then mitigated two ways (training with the section 3 weights, and one
+   decision threshold per group).
 
 Source: full AACT pull, run with `input.limit: null`.
 Outputs: `reports/bias/data_summary.json`, `reports/bias/data_slices.csv`,
@@ -106,17 +115,88 @@ of the 10x cap, which is effectively at target.
   the two heavily boosted groups (`INDIV`, `occupational diseases`).
 - Lowering `max_weight` to 5 would cut this cost but leave those two groups below 1%.
   We kept 10 as a balance between fair representation and information loss.
-- Effect on model accuracy: to be measured once a model exists.
+- Effect on model accuracy: measured with the baseline model in section 7. Reweighting leaves
+  it unchanged (PR-AUC 0.486 before and after), because the boosted groups are a few percent of
+  the trials.
 
 ## 6. Limitations and next steps
 
-- **Model-level check:** once predictions exist, set `model.predictions_path` and compare
-  per-group PR-AUC and recall. If a group (e.g. non-US trials) is served worse, apply
-  per-group thresholds (Fairlearn `ThresholdOptimizer`) or train with `trial_weights.csv`
-  and compare.
+- **Model-level check:** done with a baseline model (section 7). Repeat it for the BioBERT
+  model in the model development assignment: set `model.predictions_path` to its predictions.
 - **Missing start date:** trials with no start date stop at 24.1%, well above average.
   The modeling team should check that start-date availability does not leak outcome
   information (for example, withdrawn trials that never started).
 - **Tiny groups** (`AMBIG`, `disorders of environmental origin`) are too small for the model
   to learn from and are reported, not mitigated.
 - **Re-run** on Nithish's cleaned data once `input.source` switches from `aact` to `file`.
+
+## 7. Model-level check (baseline model)
+
+The data-level checks above cannot say whether a *model* serves every group equally well, so the
+pipeline trains one and checks it (`Data-Pipeline/scripts/bias_model.py`, stage `bias_model`,
+which runs in every pipeline run after `preprocess` and `bias`).
+
+**Setup**
+
+- **Data:** the real AACT data the pipeline uses, interventional trials registered in 2019:
+  24,236 trials, 16,753 finished (3,089 stopped, 18.4%).
+- **Model:** logistic regression on the 148 structured features (the columns `preprocess` marks
+  as a leakage risk are left out), with balanced class weights.
+- **Split by time:** trained on the 13,402 earliest-registered finished trials, tested on the
+  3,351 most recent ones, as the real model will predict for new trials.
+- **Per-group evaluation:** Fairlearn `MetricFrame` (`src/bias/model_slices.py`) on the same
+  slices as sections 1–2. The gap of a metric is the best group minus the worst group, over
+  groups with at least 100 test trials and 10 stopped ones. `UNKNOWN` groups are reported but
+  not counted, as in section 2. A recall or PR-AUC gap above 0.10 is flagged in the logs.
+- **Mitigation, two ways:** (a) `reweighted`: the same model trained with `trial_weights.csv`
+  from section 3; (b) `group_thresholds`: the baseline with one decision threshold per region,
+  chosen on the training trials so that every region gets the same recall as the model overall
+  (equal opportunity; "adjusting decision thresholds" in the guidelines).
+
+**Overall (test set, stopped rate 18.5%)**
+
+| Model | PR-AUC | ROC-AUC | Recall | Precision | Trials flagged |
+|---|---|---|---|---|---|
+| baseline | 0.486 | 0.774 | 0.781 | 0.299 | 48.3% |
+| reweighted | 0.486 | 0.775 | 0.781 | 0.300 | 48.1% |
+| group_thresholds | 0.457 | 0.756 | 0.794 | 0.282 | 52.0% |
+
+**Bias found: region.** The baseline misses far more stopped trials outside the US:
+
+| Region | Test trials | Recall: baseline | Recall: group thresholds | Precision: baseline | Precision: group thresholds |
+|---|---|---|---|---|---|
+| NON_US_ONLY | 1,854 | 0.651 | 0.777 | 0.196 | 0.177 |
+| US_ONLY | 1,114 | 0.829 | 0.776 | 0.347 | 0.362 |
+| US_AND_NON_US | 202 | 0.970 | 0.909 | 0.358 | 0.426 |
+
+The recall gap between regions falls from **0.32 to 0.13** with per-region thresholds
+(non-US 0.431, US-only 0.540, both 0.633). Reweighting does not change it (0.32), because it only
+lifts groups below 1% of the trials.
+
+**Trade-offs.** Equal recall costs some overall ranking quality: PR-AUC 0.486 to 0.457, precision
+0.299 to 0.282, and 4 points more trials flagged overall (non-US trials 38.5% to 51.0%, US-only
+trials 61.3% to 55.1%). For a tool that flags at-risk trials for review, missing
+non-US stopped trials is the worse error, so we recommend per-group thresholds for the final model,
+with the trade-off checked again then.
+
+**Other gaps (baseline, groups as defined above):**
+
+| Slice | Groups | PR-AUC gap | Recall gap | Comment |
+|---|---|---|---|---|
+| phase | 5 | 0.21 | 0.22 | follows the stopped rate (Phase 2: 35%, Phase 4: 22%); PR-AUC depends on it |
+| therapeutic_area | 17 | 0.34 | 0.46 | many small areas; noisy, re-check with the final model |
+| age_group | 3 | 0.10 | 0.14 | small |
+| gender | 3 | 0.10 | 0.09 | small |
+| sponsor_class | 2 | 0.04 | 0.00 | none (industry vs other) |
+
+**Leakage found.** Trials with no country listed (region `UNKNOWN`, 181 test trials) are predicted
+almost perfectly (PR-AUC 0.99, precision 0.98), although every country and facility column is
+already excluded as a leakage risk. Withdrawn trials lose their countries, and some other column
+still gives them away (most likely a missing-value pattern). This is not bias but a leakage
+warning: the modeling team should find that column before training the real model.
+
+**Outputs** (each run, in `Data-Pipeline/reports/bias_model/`; the 2019 run is copied to
+[`docs/bias_model_2019/`](bias_model_2019/)): `bias_model.md` (this report's tables),
+`model_slices.csv` (every group, every model), `model_gaps.csv`, `summary.json`.
+Settings: `params.yaml` section `bias_model` (test share, gap limit, minimum stopped trials,
+threshold slice) and `configs/bias_config.yaml` (slices, threshold 0.5, minimum group size 100).

@@ -15,7 +15,7 @@ same DAG, `dags/ctt_data_pipeline.py`, with its local runner:
 
 Every stage, check, retry, alert and DVC version works as it does on Google
 Cloud. Our cloud deployment, and how to repeat it in your own project, is in
-[docs/cloud_deployment.md](../../docs/cloud_deployment.md).
+[the root README](../../README.md#way-2-on-google-cloud).
 
 ## What you need
 
@@ -63,18 +63,13 @@ The same file can hold SMTP settings for the alert emails. Run
 ## What a run looks like
 
 This is our test of this setup on a MacBook, with Docker limited to 2 CPUs
-and 4 GB. Both DAGs are loaded. `ctt_data_pipeline` ran twice and
-`ctt_freeze_baseline` once:
-
-![Airflow 2.10.5 in Docker: both DAGs, all runs successful](../../docs/screenshots/local/local_1_dags.png)
-
-All nine tasks succeeded. They are `BashOperator`s here and pods on
+and 4 GB. All ten tasks succeeded. They are `BashOperator`s here and pods on
 Composer:
 
-![Graph view of the local run: all nine tasks green](../../docs/screenshots/local/local_2_graph.png)
+![Graph view of the local run: all ten tasks green](../../docs/screenshots/local/local_2_graph.png)
 
 The Gantt view shows the same parallel branches as on Composer. The whole
-run took 1 minute 47 seconds:
+run took 2 minutes 5 seconds:
 
 ![Gantt view of the local run](../../docs/screenshots/local/local_3_gantt.png)
 
@@ -96,8 +91,8 @@ pulls the input, runs the stage, pushes the output and merges `dvc.lock`:
 01:56:08 run_stage: merged stage embeddings into /opt/ctt-output/state/dvc.lock
 ```
 
-Then `freeze` made that run the baseline, and a second run on the same
-snapshot took 50 seconds. `validate` checked it against the baseline (493 of
+In an earlier test (before the `bias_model` stage existed), `freeze` made a
+run the baseline, and a second run on the same snapshot took 50 seconds. `validate` checked it against the baseline (493 of
 493 checks passed). DVC restored the unchanged outputs, for example the
 embeddings in 7 seconds, instead of computing them again.
 
@@ -128,6 +123,8 @@ report.
 REASON="first test run" ./local/pipeline.sh freeze  # this run's schema and
                                                     # statistics become the
                                                     # validation baseline
+./local/pipeline.sh schedule "@weekly"  # change how often it runs, live
+./local/pipeline.sh schedule default   # back to monthly
 ./local/pipeline.sh status    # list the runs
 ./local/pipeline.sh down      # stop Airflow; output/ and the run history stay
 ./local/pipeline.sh clean     # stop and delete the history and output/

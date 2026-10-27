@@ -14,7 +14,7 @@ ties every part of the data pipeline assignment together:
 | 7. Data schema and statistics generation | `scripts/schema_stats.py`, `scripts/validate.py`, `schema/` |
 | 8. Anomaly detection and alerts | `scripts/anomalies.py` |
 | 9. Pipeline flow optimization | `docs/pipeline_optimization.md` |
-| Bias detection and mitigation | `scripts/bias.py` calls `../src/bias/` |
+| Bias detection and mitigation | `scripts/bias.py` calls `../src/bias/` (data); `scripts/bias_model.py` (baseline model per group) |
 | BioBERT text embeddings | `scripts/text.py`, `scripts/embeddings.py` call `../src/features/`; GPU job on Vertex AI |
 
 The stages call the team's shared code in `../src/` (ingestion, features,
@@ -26,7 +26,7 @@ bias, error handling). The same DAG runs in two places:
   Data versions live in the GCS bucket `gs://ctt-mlops-project-data`, and
   BioBERT runs as a Vertex AI GPU job. Anyone can deploy it in their own
   project with `composer/deploy.sh`. Both are shown in
-  [../docs/cloud_deployment.md](../docs/cloud_deployment.md), with
+  [the root README](../README.md#way-2-on-google-cloud), with
   screenshots from a run.
 - **One machine**: Airflow in Docker (`local/`). The run state and the DVC
   remote are folders in `local/output/`, and BioBERT runs on the CPU, so no
@@ -44,7 +44,8 @@ AACT format, so the whole pipeline can still be exercised end to end.
                        |
                +--> preprocess --+--> schema_stats --> validate --+
                |                 +--> anomalies -------------------+
-    acquire ---+--> bias ------------------------------------------+--> publish
+               |                 +--> bias_model ------------------+
+    acquire ---+--> bias -------------^                            +--> publish
                +--> text --> embeddings (Vertex AI T4 GPU job) ----+
                        |
    each task = one pod from the pipeline image, running one DVC stage
@@ -64,6 +65,7 @@ AACT format, so the whole pipeline can still be exercised end to end.
 | `anomalies` | Flags duplicate or malformed ids, invalid labels, impossible values (critical) and missing-value spikes, outliers, bad dates (warnings); emails an alert, stops the run on critical findings | `reports/anomalies/` |
 | `validate` | Checks the snapshot against the frozen baseline schema and statistics; stops the run on critical problems and emails an alert | `reports/validation/` |
 | `text` | Cleaned registration-time text of every trial (title, summary, description, inclusion, exclusion, outcomes) via `src/features/build_text_sample.py` | `data/processed/text_all.jsonl` |
+| `bias_model` | Trains a baseline logistic regression, evaluates it per group with Fairlearn, and mitigates the gaps (training with the `bias` weights; one threshold per region); flags gaps above 0.10 | `reports/bias_model/` |
 | `embeddings` | BioBERT embeddings per text field (`src/features/biobert_embeddings.py`), on a Vertex AI GPU by default; see below | `data/processed/embeddings/` |
 | `publish` | Pushes every output to the DVC remote and writes a data-version record | `logs/versions/`, GCS `state/versions/` |
 
@@ -77,6 +79,7 @@ Data-Pipeline/
 |  |- sample_snapshot.py       seeded test snapshot in the AACT format
 |  |- preprocess.py            stage 2 adapter (feature code or placeholder)
 |  |- bias.py                  bias detection and mitigation on the snapshot
+|  |- bias_model.py            baseline model, its bias per group, mitigation
 |  |- text.py                  cleaned trial text (BioBERT input)
 |  |- embeddings.py            BioBERT embeddings (Vertex AI GPU job)
 |  |- schema_stats.py          statistics + Great Expectations schema
@@ -147,7 +150,7 @@ gcloud auth login && gcloud config set project ctt-mlops-project
 
 Details: [composer/README.md](composer/README.md). To deploy it in your own
 Google Cloud project, set `PROJECT` and follow
-[../docs/cloud_deployment.md](../docs/cloud_deployment.md#2-deploy-it-in-your-own-project).
+[the root README](../README.md#23-commands-to-deploy-it-in-your-project).
 
 **Real AACT data:** put `AACT_USER` and `AACT_PASSWORD` in
 `Data-Pipeline/.env` (from `.env.example`); `up` stores them as a Composer
@@ -178,8 +181,14 @@ itself instead.
 `dags/ctt_data_pipeline.py` defines the DAG `ctt_data_pipeline`:
 
 - `acquire` first, then `preprocess`, `bias` and `text` in parallel, then
-  `schema_stats`, `anomalies` and `embeddings` in parallel, then
-  `validate`, then `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
+  `schema_stats`, `anomalies`, `bias_model` and `embeddings` in parallel,
+  then `validate`, then `publish` (see the diagram above).
+- It runs monthly by default (the 5th at 06:00 UTC, after the monthly AACT
+  export). The schedule is the Airflow Variable `ctt_schedule`, which can be
+  changed while Airflow runs (`./local/pipeline.sh schedule "@weekly"` or
+  `SCHEDULE="@weekly" ./composer/deploy.sh schedule`, or Admin > Variables
+  in the UI); see
+  [the root README](../README.md#changing-how-often-it-runs). It can also be
   triggered by hand with a config such as
   `{"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}`.
 - On Composer, every task is a `KubernetesPodOperator`: a pod from the
@@ -333,8 +342,27 @@ trials whose minimum age was above their maximum age.
 `../configs/bias_config.yaml`) on the same snapshot as the rest of the run,
 through the `snapshot` source of `src/bias/load_data.py`, so no AACT
 database account is needed. Outputs: `reports/bias/data_slices.csv`,
-`data_summary.json` and `mitigation/`. The findings and trade-offs are
-discussed in `../docs/bias_report.md`.
+`data_summary.json` and `mitigation/`.
+
+`scripts/bias_model.py` (stage `bias_model`) then checks a model, as the
+guidelines ask ("evaluate how your model behaves for each of these
+subgroups"):
+
+1. trains a baseline logistic regression on the structured features of the
+   finished trials (leakage-risk columns left out), split by time: the most
+   recently registered 20% is the test set;
+2. evaluates it per group with Fairlearn (`../src/bias/model_slices.py`) and
+   flags recall or PR-AUC gaps above 0.10 between the best and the worst
+   group;
+3. mitigates two ways and evaluates both the same way: training with the
+   `bias` stage's trial weights, and one decision threshold per region so
+   that every region gets the same recall.
+
+Outputs: `reports/bias_model/bias_model.md`, `model_slices.csv`,
+`model_gaps.csv` and `summary.json`. On the real 2019 AACT data the
+thresholds cut the recall gap between regions from 0.32 to 0.13, at a cost
+of 0.03 PR-AUC. The findings and trade-offs of both stages are discussed in
+`../docs/bias_report.md`.
 
 ## 9. Pipeline flow optimization
 
@@ -371,18 +399,20 @@ records and alert emails say what kind of failure happened.
 pip install -r requirements.txt && pytest
 ```
 
-78 tests cover the test snapshot and features, statistics values, the
+86 tests cover the test snapshot and features, statistics values, the
 inferred schema, every critical and warning check (a dropped column,
 duplicate or malformed ids, an invalid label, out-of-range values), drift
 detection, the snapshot date in the statistics, every anomaly check, the
-bias stage, the text stage, the Vertex AI
-job (spec, CPU-only spec, polling, cancel on stop, the round trip through the
-bucket, settings from the environment), the local BioBERT backend, the fail
-and alert policies, run records, email alerts (with a fake SMTP server),
-parameter overrides, the `dvc.lock` merge under concurrent writes (GCS and
-a local state folder), the DVC remote override, the stage graph, and the DAG
-on both runners (the 5 DAG tests need Airflow installed and are skipped
-otherwise). Google Cloud is faked in the tests, so they need no credentials.
+bias stage, the baseline model stage (features without leakage columns, the
+time split, the per-group report of all three models, equal recall from
+per-group thresholds, which groups count in a gap, a single-class input),
+the text stage, the Vertex AI job (spec, CPU-only spec, polling, cancel on
+stop, the round trip through the bucket, settings from the environment),
+the local BioBERT backend, the fail and alert policies, run records, email
+alerts (with a fake SMTP server), parameter overrides, the `dvc.lock` merge
+under concurrent writes (GCS and a local state folder), the DVC remote
+override, the stage graph, and the DAG on both runners and its schedule
+(the 6 DAG tests need Airflow installed and are skipped otherwise). Google Cloud is faked in the tests, so they need no credentials.
 
 ## Reproducibility
 
@@ -391,7 +421,7 @@ otherwise). Google Cloud is faked in the tests, so they need no credentials.
   ([local/README.md](local/README.md)).
 - **Any Google Cloud project:** `PROJECT=<id> ./composer/deploy.sh setup`,
   `image`, `gpu-image`, `up`, `trigger`
-  ([../docs/cloud_deployment.md](../docs/cloud_deployment.md)).
+  ([../README.md](../README.md#way-2-on-google-cloud)).
 - The test snapshot is seeded, so the same parameters give the same files
   and the same `dvc.lock` hashes in both places. Every run's `dvc.lock`
   stays in `state/versions/`, so the exact data of any run can be pulled

@@ -10,7 +10,7 @@ The commands below use our project. In your own project, `export
 PROJECT=<your project id>` first: the bucket (`<project>-data`), the
 service accounts, the images and every setting the pods get follow from it.
 The full walk-through, with screenshots of our deployment, is in
-[../../docs/cloud_deployment.md](../../docs/cloud_deployment.md). To run the
+[the root README](../../README.md#way-2-on-google-cloud). To run the
 pipeline without any cloud account, use [../local/](../local/README.md).
 
 **Cost:** a Composer environment is billed every hour it exists, even when no
@@ -43,6 +43,8 @@ export ALERT_EMAILS=<a@x.com,b@y.com>   # optional: failure emails
 ./composer/deploy.sh trigger   # SNAPSHOT=20261101 SOURCE=db ... to choose
 ./composer/deploy.sh ui        # the Airflow web UI address
 ./composer/deploy.sh lock      # copy the run's dvc.lock here, then commit it
+SCHEDULE="@weekly" ./composer/deploy.sh schedule   # change how often it runs
+                               # (live; "default" = monthly, "none" = manual)
 ./composer/deploy.sh down      # snapshot Airflow's history, then delete
 ```
 
