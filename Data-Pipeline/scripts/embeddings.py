@@ -11,13 +11,19 @@ data/processed/embeddings/:
 
 The embedding code is src/features/biobert_embeddings.py (Task 1):
 dmis-lab/biobert-base-cased-v1.2 used as is, long texts split into
-overlapping 512-token windows and averaged. It runs as a Vertex AI custom job
-on a T4 GPU: this same module in worker mode, in the GPU image
-(docker/Dockerfile.gpu). Input and output pass through the GCS bucket, and
-the result comes back to the stage so DVC versions it like every other
+overlapping 512-token windows and averaged. On Google Cloud it runs as a
+Vertex AI custom job on a T4 GPU: this same module in worker mode, in the GPU
+image (docker/Dockerfile.gpu). Input and output pass through the GCS bucket,
+and the result comes back to the stage so DVC versions it like every other
 output. params.yaml (section embeddings) sets the machine, the model
 settings, and max_trials, which caps the number of trials for a quick test
-(0 = all).
+(0 = all); an empty accelerator runs the job on CPU only.
+
+Where the job runs comes from the environment, so the same code runs in any
+Google Cloud project: PIPELINE_GCP_PROJECT, PIPELINE_REGION,
+PIPELINE_BUCKET, PIPELINE_GPU_IMAGE, PIPELINE_SERVICE_ACCOUNT.
+PIPELINE_EMBEDDINGS=local skips Vertex AI and runs BioBERT on this
+machine's CPU (the local Docker Airflow does this).
 
     python -m scripts.embeddings                       # stage
     python -m scripts.embeddings --worker --input gs://... --output gs://...
@@ -28,6 +34,7 @@ import argparse
 import datetime as dt
 import json
 import logging
+import os
 import re
 import shutil
 import signal
@@ -50,14 +57,27 @@ DEFAULTS = {
     "max_trials": 0, "batch_size": 32,
     "max_length": 512, "stride": 64,
     "model": "dmis-lab/biobert-base-cased-v1.2",
-    "project": "ctt-mlops-project", "region": "us-central1",
-    "bucket": "ctt-mlops-project-data",
-    "image": "us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/"
-             "biobert-gpu:latest",
     "machine_type": "n1-standard-8", "accelerator": "NVIDIA_TESLA_T4",
-    "service_account": "pipeline-sa@ctt-mlops-project.iam.gserviceaccount.com",
     "timeout_hours": 8,
 }
+
+
+def deployment():
+    """Where the Vertex AI job runs (environment, team project by default)."""
+    env = os.environ.get
+    project = env("PIPELINE_GCP_PROJECT") or "ctt-mlops-project"
+    region = env("PIPELINE_REGION") or "us-central1"
+    return {
+        "backend": env("PIPELINE_EMBEDDINGS") or "vertex",
+        "project": project, "region": region,
+        "bucket": env("PIPELINE_BUCKET") or f"{project}-data",
+        "image": env("PIPELINE_GPU_IMAGE") or
+        f"{region}-docker.pkg.dev/{project}/ctt-images/biobert-gpu:latest",
+        "service_account": env("PIPELINE_SERVICE_ACCOUNT") or
+        f"pipeline-sa@{project}.iam.gserviceaccount.com",
+    }
+
+
 # settings the worker needs; the rest only says where the job runs
 EMBED_KEYS = ["model", "batch_size", "max_length", "stride", "max_trials"]
 
@@ -151,14 +171,15 @@ def _session(project):
 
 
 def vertex_job_spec(p, input_uri, output_uri, run_name):
+    machine = {"machineType": p["machine_type"]}
+    if p.get("accelerator"):
+        machine.update(acceleratorType=p["accelerator"], acceleratorCount=1)
     return {
         "displayName": f"ctt-biobert-{run_name}"[:120],
         "labels": {"app": "ctt-data-pipeline", "stage": "embeddings"},
         "jobSpec": {
             "workerPoolSpecs": [{
-                "machineSpec": {"machineType": p["machine_type"],
-                                "acceleratorType": p["accelerator"],
-                                "acceleratorCount": 1},
+                "machineSpec": machine,
                 "replicaCount": "1",
                 "diskSpec": {"bootDiskType": "pd-ssd",
                              "bootDiskSizeGb": 100},
@@ -234,6 +255,13 @@ def run_on_vertex(p, run_name, poll_seconds=60):
     return meta
 
 
+def run_local(p):
+    """BioBERT on this machine (CPU, or a GPU if there is one)."""
+    if EMB_DIR.exists():
+        shutil.rmtree(EMB_DIR)
+    return embed_rows(read_texts(TEXT_JSONL, p["max_trials"]), EMB_DIR, p)
+
+
 # ---------------------------------------------------------------- entry points
 def worker(input_uri, output_uri, settings):
     """Inside the Vertex AI job: GCS text in, GCS embeddings out."""
@@ -249,9 +277,13 @@ def worker(input_uri, output_uri, settings):
 
 def stage():
     with tracked_step("embeddings") as run:
-        p = {**DEFAULTS, **load_params().get("embeddings", {})}
-        meta = run_on_vertex(
-            p, re.sub(r"[^a-z0-9-]+", "-", run["run_id"].lower()))
+        p = {**DEFAULTS, **load_params().get("embeddings", {}),
+             **deployment()}
+        if p["backend"] == "local":
+            meta = run_local(p)
+        else:
+            meta = run_on_vertex(
+                p, re.sub(r"[^a-z0-9-]+", "-", run["run_id"].lower()))
         run["metrics"].update({"rows": meta["rows"],
                                **{f"seconds_{k}": v
                                   for k, v in meta["seconds"].items()}})

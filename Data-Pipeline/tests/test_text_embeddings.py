@@ -60,8 +60,15 @@ def test_text_stage_writes_every_trial(text_file):
     assert meta["all_trials"] is True and meta["n_rows"] == 300
 
 
-def test_vertex_job_spec_uses_gpu_and_pipeline_sa():
-    p = {**embeddings.DEFAULTS, "max_trials": 10}
+@pytest.fixture()
+def no_deployment_env(monkeypatch):
+    for name in ["EMBEDDINGS", "GCP_PROJECT", "REGION", "BUCKET",
+                 "GPU_IMAGE", "SERVICE_ACCOUNT"]:
+        monkeypatch.delenv(f"PIPELINE_{name}", raising=False)
+
+
+def test_vertex_job_spec_uses_gpu_and_pipeline_sa(no_deployment_env):
+    p = {**embeddings.DEFAULTS, **embeddings.deployment(), "max_trials": 10}
     spec = embeddings.vertex_job_spec(p, "gs://b/in.jsonl", "gs://b/out",
                                       "run-1")
     pool = spec["jobSpec"]["workerPoolSpecs"][0]
@@ -72,6 +79,41 @@ def test_vertex_job_spec_uses_gpu_and_pipeline_sa():
     settings = json.loads(args[args.index("--settings") + 1])
     assert settings == {k: p[k] for k in embeddings.EMBED_KEYS}
     assert args[args.index("--input") + 1] == "gs://b/in.jsonl"
+
+
+def test_vertex_job_without_accelerator_runs_on_cpu(no_deployment_env):
+    p = {**embeddings.DEFAULTS, **embeddings.deployment(), "accelerator": ""}
+    spec = embeddings.vertex_job_spec(p, "gs://b/in", "gs://b/out", "r")
+    machine = spec["jobSpec"]["workerPoolSpecs"][0]["machineSpec"]
+    assert machine == {"machineType": "n1-standard-8"}
+
+
+def test_deployment_comes_from_the_environment(no_deployment_env,
+                                               monkeypatch):
+    assert embeddings.deployment()["bucket"] == "ctt-mlops-project-data"
+    monkeypatch.setenv("PIPELINE_GCP_PROJECT", "their-project")
+    monkeypatch.setenv("PIPELINE_REGION", "europe-west4")
+    d = embeddings.deployment()
+    assert d["bucket"] == "their-project-data"
+    assert d["image"] == ("europe-west4-docker.pkg.dev/their-project/"
+                          "ctt-images/biobert-gpu:latest")
+    assert d["service_account"] == \
+        "pipeline-sa@their-project.iam.gserviceaccount.com"
+
+
+def test_local_backend_embeds_without_vertex(text_file, tmp_path, monkeypatch,
+                                             stub_biobert, no_deployment_env):
+    monkeypatch.setenv("PIPELINE_EMBEDDINGS", "local")
+    monkeypatch.setattr(embeddings, "run_on_vertex", None)  # must not run
+    out = tmp_path / "embeddings"
+    monkeypatch.setattr(embeddings, "TEXT_JSONL", text_file)
+    monkeypatch.setattr(embeddings, "EMB_DIR", out)
+    monkeypatch.setattr(embeddings, "tracked_step", fake_tracked_step)
+    monkeypatch.setattr(embeddings, "load_params", lambda: {
+        "embeddings": {"max_trials": 15}})
+    embeddings.stage()
+    assert json.loads((out / "meta.json").read_text())["rows"] == 15
+    assert np.load(out / "title.npy").shape == (15, 8)
 
 
 class FakeSession:
@@ -106,7 +148,8 @@ def test_wait_for_job_cancels_when_stopped():
     assert session.calls[-1] == ("post", "https://x/job:cancel")
 
 
-def test_vertex_round_trip(text_file, tmp_path, monkeypatch, stub_biobert):
+def test_vertex_round_trip(text_file, tmp_path, monkeypatch, stub_biobert,
+                           no_deployment_env):
     """stage(): upload text, run the job (here: the worker, in process),
     download the result into EMB_DIR."""
     bucket = {}

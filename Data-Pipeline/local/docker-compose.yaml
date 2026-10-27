@@ -1,0 +1,100 @@
+# The whole data pipeline on one machine: Airflow (LocalExecutor on
+# Postgres) running the same DAG as Cloud Composer, with the local runner.
+# No cloud account is needed. Start it with ./local/pipeline.sh up (see
+# local/README.md); the Airflow UI is at http://localhost:8080 (admin/admin),
+# or the port in CTT_UI_PORT.
+#
+# The repository is mounted read-only at /opt/ctt: each task copies the code
+# to a temporary folder (local/run_task.sh), like a fresh Composer pod.
+# Everything a run writes goes to local/output/ on this machine:
+#   output/state/      run state: params, dvc.lock, logs, reports, baseline,
+#                      data-version records (the GCS state folder on cloud)
+#   output/dvc-store/  DVC remote: every data version (the GCS bucket on cloud)
+
+name: ctt-data-pipeline
+
+x-airflow: &airflow
+  build:
+    context: ..
+    dockerfile: local/Dockerfile
+  image: ctt-data-pipeline-local:2.10.5
+  user: "${AIRFLOW_UID:-50000}:0"
+  env_file:
+    # optional pipeline settings: AACT_* (real data), SMTP_* / ALERT_* (alerts)
+    - path: ../.env
+      required: false
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/ctt/Data-Pipeline/dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # independent branches run at the same time (3 tasks at most, so the
+    # stack fits in a 4 GB Docker VM)
+    AIRFLOW__CORE__PARALLELISM: ${CTT_PARALLELISM:-3}
+    AIRFLOW__WEBSERVER__WORKERS: "2"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    CTT_RUNNER: local
+    CTT_STATE_URI: /opt/ctt-output/state
+    CTT_DVC_REMOTE: /opt/ctt-output/dvc-store
+    CTT_EMBEDDINGS: local
+    CTT_SOURCE: ${CTT_SOURCE:-sample}
+    CTT_ALERT_EMAILS: ""
+  volumes:
+    - ../..:/opt/ctt:ro
+    - ./output:/opt/ctt-output
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow
+    # through the image's entrypoint, which also gives a host user id
+    # (AIRFLOW_UID) a user name
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate &&
+        { airflow users create --role Admin --username admin \
+            --firstname Admin --lastname User --email admin@example.com \
+            --password admin || true; }
+    restart: "no"
+
+  scheduler:
+    <<: *airflow
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  webserver:
+    <<: *airflow
+    command: webserver
+    # this machine only; CTT_UI_PORT=8081 if 8080 is taken
+    ports:
+      - "127.0.0.1:${CTT_UI_PORT:-8080}:8080"
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow-db:

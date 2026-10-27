@@ -17,19 +17,32 @@ run; see docs/pipeline_optimization.md.
 fails the task and stops the run before `publish` records a bad data
 version.
 
-It runs on Cloud Composer, which only orchestrates: each task is a
-Kubernetes pod started from the pipeline image in Artifact Registry
-(docker/Dockerfile, built and pushed by CI), with its run state in GCS and
-its data in the DVC remote.
+It runs in one of two places (CTT_RUNNER):
+
+  composer  (default) Cloud Composer, which only orchestrates: each task is
+            a Kubernetes pod started from the pipeline image in Artifact
+            Registry (docker/Dockerfile, built and pushed by CI), with its
+            run state in GCS and its data in the DVC remote in GCS.
+  local     the Docker Compose Airflow in local/: each task runs
+            local/run_task.sh, which copies the code to a temporary folder
+            (as fresh as a pod); run state and the DVC remote are folders on
+            the machine, and BioBERT runs on its CPU. No cloud account.
 
 A second DAG, ctt_freeze_baseline, makes the latest run's schema and
 statistics the validation baseline: {"reason": "first real AACT snapshot"}.
 
-Configuration (environment variables of the Composer environment):
+Configuration (environment variables of the Composer environment, set by
+composer/deploy.sh, or of the local containers, set in local/):
 
+  CTT_RUNNER        composer or local
   CTT_IMAGE         pipeline image in Artifact Registry
   CTT_STATE_URI     shared run state (default gs://ctt-mlops-project-data/
-                    data-pipeline/state)
+                    data-pipeline/state; a folder for the local runner)
+  CTT_DVC_REMOTE    DVC remote, if not the one in .dvc/config
+  CTT_GCP_PROJECT, CTT_REGION, CTT_BUCKET, CTT_GPU_IMAGE,
+  CTT_SERVICE_ACCOUNT
+                    where the Vertex AI embeddings job runs
+  CTT_EMBEDDINGS    vertex (default) or local (BioBERT on the CPU)
   CTT_ALERT_EMAILS  comma-separated failure-email recipients
   CTT_SOURCE        default acquire.source (sample, zip or db)
   CTT_ZIP           default acquire.zip, for source zip
@@ -44,21 +57,25 @@ and, for the test source, its size: {"source": "sample", "sample_trials": 50000}
 import json
 import logging
 import os
+import shlex
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from airflow import DAG
-from airflow.providers.cncf.kubernetes.operators.pod import \
-    KubernetesPodOperator
-from airflow.providers.cncf.kubernetes.secret import Secret
-from kubernetes.client import models as k8s
 
 log = logging.getLogger(__name__)
 
+RUNNER = os.environ.get("CTT_RUNNER", "composer")
 IMAGE = os.environ.get(
     "CTT_IMAGE",
     "us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/data-pipeline:latest")
 STATE_URI = os.environ.get("CTT_STATE_URI",
                            "gs://ctt-mlops-project-data/data-pipeline/state")
+# local runner: the script each task runs (next to this repository's dags/)
+RUN_TASK = Path(__file__).resolve().parents[1] / "local" / "run_task.sh"
+# passed to every task as PIPELINE_<name> when set (see the docstring)
+DEPLOYMENT = ["DVC_REMOTE", "GCP_PROJECT", "REGION", "BUCKET", "GPU_IMAGE",
+              "SERVICE_ACCOUNT", "EMBEDDINGS"]
 ALERT_EMAILS = [e.strip() for e in
                 os.environ.get("CTT_ALERT_EMAILS", "").split(",") if e.strip()]
 NAMESPACE = os.environ.get("CTT_NAMESPACE", "composer-user-workloads")
@@ -86,17 +103,22 @@ def log_failure(context):
 
 
 def step_env():
-    return {"PIPELINE_RUN_ID": "{{ run_id }}",
-            "PIPELINE_STATE_URI": STATE_URI,
-            # run_stage.py emails a task failure once, on the last attempt;
-            # the stage itself then does not email it a second time
-            "PIPELINE_ORCHESTRATED": "1",
-            "PIPELINE_TRY": "{{ ti.try_number }}",
-            "PIPELINE_MAX_TRIES": "{{ task.retries + 1 }}"}
+    env = {"PIPELINE_RUN_ID": "{{ run_id }}",
+           "PIPELINE_STATE_URI": STATE_URI,
+           # run_stage.py emails a task failure once, on the last attempt;
+           # the stage itself then does not email it a second time
+           "PIPELINE_ORCHESTRATED": "1",
+           "PIPELINE_TRY": "{{ ti.try_number }}",
+           "PIPELINE_MAX_TRIES": "{{ task.retries + 1 }}"}
+    for name in DEPLOYMENT:
+        if os.environ.get(f"CTT_{name}"):
+            env[f"PIPELINE_{name}"] = os.environ[f"CTT_{name}"]
+    return env
 
 
 def step(stage, params=None, extra_args=(), timeout=timedelta(hours=2)):
-    """One pipeline stage as a pod running the pipeline image.
+    """One pipeline stage: a pod running the pipeline image (composer) or
+    local/run_task.sh (local).
 
     params are params.yaml overrides ({"acquire.snapshot": "..."}); values
     may be Jinja templates.
@@ -105,6 +127,21 @@ def step(stage, params=None, extra_args=(), timeout=timedelta(hours=2)):
     for key, value in (params or {}).items():
         args += ["--param", f"{key}={value}"]
     args += list(extra_args)
+    if RUNNER == "local":
+        from airflow.operators.bash import BashOperator
+        return BashOperator(
+            task_id=stage,
+            bash_command=shlex.join(["bash", str(RUN_TASK), *args]),
+            # the container's environment (AACT and SMTP settings) plus ours
+            env=step_env(),
+            append_env=True,
+            execution_timeout=timeout,
+        )
+
+    from airflow.providers.cncf.kubernetes.operators.pod import \
+        KubernetesPodOperator
+    from airflow.providers.cncf.kubernetes.secret import Secret
+    from kubernetes.client import models as k8s
     secrets = [Secret("env", None, SMTP_SECRET)] if SMTP_SECRET else []
     return KubernetesPodOperator(
         task_id=stage,

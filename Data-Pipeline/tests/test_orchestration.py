@@ -76,11 +76,73 @@ def test_unknown_stage(monkeypatch):
         run_stage.run_stage("train")
 
 
-def test_state_uri_must_be_gcs():
+def test_gcs_uri_split():
     with pytest.raises(ValueError):
         run_stage._split("s3://bucket/x")
     assert run_stage._split("gs://b/data-pipeline/state") == \
         ("b", "data-pipeline/state")
+
+
+def test_local_state_folder_round_trip(tmp_path):
+    state = tmp_path / "state"
+    src = tmp_path / "a.txt"
+    src.write_text("hello")
+    assert run_stage.download(f"{state}/a.txt", tmp_path / "b.txt") is False
+    run_stage.upload(src, f"{state}/runs/r1/a.txt")
+    assert run_stage.download(f"{state}/runs/r1/a.txt", tmp_path / "c.txt")
+    assert (tmp_path / "c.txt").read_text() == "hello"
+    folder = tmp_path / "reports"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "x.md").write_text("x")
+    run_stage.upload_tree(folder, f"{state}/baseline")
+    assert run_stage.download_tree(f"{state}/baseline", tmp_path / "copy")
+    assert (tmp_path / "copy" / "sub" / "x.md").read_text() == "x"
+    assert run_stage.download_tree(f"{state}/none", tmp_path / "n") is False
+
+
+def test_local_write_is_conditional(tmp_path):
+    uri = str(tmp_path / "state" / "dvc.lock")
+    assert run_stage.read_versioned(uri) == (None, 0)
+    assert run_stage.write_if_generation(uri, "one", 0)
+    assert run_stage.write_if_generation(uri, "again", 0) is False
+    text, generation = run_stage.read_versioned(uri)
+    assert text == "one"
+    assert run_stage.write_if_generation(uri, "two", generation)
+    assert run_stage.write_if_generation(uri, "three", generation) is False
+    assert run_stage.read_versioned(uri)[0] == "two"
+
+
+def test_push_lock_to_a_local_state_folder(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "dvc.lock").write_text(
+        yaml.safe_dump({"stages": {"acquire": {"cmd": "a"}}}))
+    lock = tmp_path / "dvc.lock"
+    lock.write_text(yaml.safe_dump({"stages": {"bias": {"cmd": "b"}}}))
+    monkeypatch.setattr(run_stage, "LOCK_FILE", lock)
+    run_stage.State(str(state), "r1").push_lock("bias")
+    shared = yaml.safe_load((state / "dvc.lock").read_text())
+    assert set(shared["stages"]) == {"acquire", "bias"}
+    assert (state / "runs" / "r1" / "dvc.lock").exists()
+
+
+def test_dvc_remote_override(monkeypatch):
+    calls = []
+    monkeypatch.setattr(run_stage, "dvc", lambda *a, **k: calls.append(a))
+    monkeypatch.delenv("PIPELINE_DVC_REMOTE", raising=False)
+    monkeypatch.delenv("PIPELINE_GCP_PROJECT", raising=False)
+    run_stage.configure_remote()
+    assert calls == []
+    monkeypatch.setenv("PIPELINE_DVC_REMOTE", "/opt/ctt-output/dvc-store")
+    run_stage.configure_remote()
+    assert calls == [("remote", "add", "--local", "--force", "--default",
+                      "pipeline", "/opt/ctt-output/dvc-store")]
+    calls.clear()
+    monkeypatch.setenv("PIPELINE_DVC_REMOTE", "gs://their-bucket/dvc-store")
+    monkeypatch.setenv("PIPELINE_GCP_PROJECT", "their-project")
+    run_stage.configure_remote()
+    assert calls[1] == ("remote", "modify", "--local", "pipeline",
+                        "projectname", "their-project")
 
 
 # ---------------------------------------------------------------- tracking
@@ -218,6 +280,16 @@ def test_alert_failure_does_not_raise(monkeypatch):
 
 
 # ---------------------------------------------------------------- DAG
+@pytest.fixture(autouse=True)
+def composer_env(monkeypatch):
+    """The DAG reads CTT_* when it is loaded: start from Composer's
+    defaults."""
+    for name in ["RUNNER", "STATE_URI", "DVC_REMOTE", "GCP_PROJECT",
+                 "REGION", "BUCKET", "GPU_IMAGE", "SERVICE_ACCOUNT",
+                 "EMBEDDINGS"]:
+        monkeypatch.delenv(f"CTT_{name}", raising=False)
+
+
 def load_dag(dag_id="ctt_data_pipeline"):
     pytest.importorskip("airflow.models")
     pytest.importorskip("airflow.providers.cncf.kubernetes")
@@ -263,6 +335,36 @@ def test_tasks_pass_params_as_separate_args():
     assert env["PIPELINE_RUN_ID"] == "{{ run_id }}"
     assert env["PIPELINE_ORCHESTRATED"] == "1"
     assert env["PIPELINE_STATE_URI"].startswith("gs://")
+
+
+def test_deployment_settings_reach_every_pod(monkeypatch):
+    monkeypatch.setenv("CTT_GCP_PROJECT", "their-project")
+    monkeypatch.setenv("CTT_DVC_REMOTE", "gs://their-project-data/dvc-store")
+    dag = load_dag()
+    env = {e.name: e.value for e in dag.get_task("embeddings").env_vars}
+    assert env["PIPELINE_GCP_PROJECT"] == "their-project"
+    assert env["PIPELINE_DVC_REMOTE"] == "gs://their-project-data/dvc-store"
+    assert "PIPELINE_BUCKET" not in env  # unset: the stage's default
+
+
+def test_local_runner_runs_each_stage_in_bash(monkeypatch):
+    monkeypatch.setenv("CTT_RUNNER", "local")
+    monkeypatch.setenv("CTT_STATE_URI", "/opt/ctt-output/state")
+    monkeypatch.setenv("CTT_EMBEDDINGS", "local")
+    dag = load_dag()
+    assert len(dag.tasks) == 9
+    for t in dag.tasks:
+        assert type(t).__name__ == "BashOperator"
+        assert "local/run_task.sh" in t.bash_command
+        assert t.env["PIPELINE_STATE_URI"] == "/opt/ctt-output/state"
+        assert t.env["PIPELINE_EMBEDDINGS"] == "local"
+        assert t.append_env is True
+    cmd = dag.get_task("acquire").bash_command
+    assert cmd.count("--param") == 4
+    # each override is one shell word, its template intact
+    assert "'acquire.snapshot={{ dag_run.conf.get(\"snapshot\")" in cmd
+    (freeze,) = load_dag("ctt_freeze_baseline").tasks
+    assert "freeze --reason" in freeze.bash_command
 
 
 # ---------------------------------------------------------------- dvc.lock
