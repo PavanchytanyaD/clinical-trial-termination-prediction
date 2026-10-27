@@ -26,13 +26,14 @@ Northeastern University · MLOps (IE 7305) · Data pipeline assignment
 3. [How to run the pipeline: two ways](#how-to-run-the-pipeline-two-ways)
    - [Way 1: on your machine (Docker)](#way-1-on-your-machine-docker)
    - [Way 2: on Google Cloud](#way-2-on-google-cloud)
-4. [Changing how often it runs](#changing-how-often-it-runs)
-5. [Email alerts](#email-alerts)
-6. [Environment setup](#environment-setup)
-7. [Data versioning and reproducibility](#data-versioning-and-reproducibility)
-8. [Tests and code quality](#tests-and-code-quality)
-9. [Code structure](#code-structure)
-10. [Component details](#component-details)
+4. [Bias detection and mitigation](#bias-detection-and-mitigation)
+5. [Changing how often it runs](#changing-how-often-it-runs)
+6. [Email alerts](#email-alerts)
+7. [Environment setup](#environment-setup)
+8. [Data versioning and reproducibility](#data-versioning-and-reproducibility)
+9. [Tests and code quality](#tests-and-code-quality)
+10. [Code structure](#code-structure)
+11. [Component details](#component-details)
 
 ---
 
@@ -406,6 +407,20 @@ More: [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md). CI/C
 
 ---
 
+## Bias detection and mitigation
+
+> [!IMPORTANT]
+> **The bias report is [docs/bias_report.md](docs/bias_report.md).** It is the only report: what bias we found, how we mitigated it, and the trade-offs. It is based on one pipeline run on the real AACT data (interventional trials registered in 2019, 24,236 trials); [docs/bias_report_evidence/](docs/bias_report_evidence/) holds that run's raw output, so every number can be checked.
+
+Bias is checked in every pipeline run, at two levels. The data is trial-level (no patients), so the slices are trial attributes: phase, study type, sponsor class, region, therapeutic area, eligible gender, eligible age group and start era.
+
+| Level | Stage | What it checks | Main finding | Mitigation |
+|---|---|---|---|---|
+| Data | `bias` | Groups too small to learn from; stopped rates far from the overall 18.4% | 6 groups under 1% of finished trials (e.g. NIH and individual sponsors); Phase 2 and cancer trials stop far more often; US-only trials stop twice as often as non-US | NIH reweighted up to a 1% share (`trial_weights.csv`); the other 5 have under 100 trials, too few to boost; real rate differences left as they are |
+| Model | `bias_model` | A baseline model's recall and PR-AUC in each group (Fairlearn) | Recall differs by 0.32 between regions | One decision threshold per region: gap 0.32 → 0.13, at a cost of 0.03 PR-AUC |
+
+---
+
 ## Changing how often it runs
 
 Airflow's scheduler starts the pipeline on a schedule. **By default: monthly, on the 5th at 06:00 UTC**, after AACT's monthly export. The schedule is not hard-coded: it is the Airflow Variable `ctt_schedule`, which can be changed **while Airflow runs, with nothing to redeploy**. The scheduler picks up a change within about a minute.
@@ -533,7 +548,7 @@ clinical-trial-termination-prediction/
 │   └── logging_utils.py           logging for src scripts
 ├── tests/                         tests for src/
 ├── configs/bias_config.yaml       bias settings (read by the bias stages)
-├── docs/                          setup guide, bias report and its results, screenshots
+├── docs/                          setup guide, bias report (+ its evidence), screenshots
 ├── requirements.txt               packages for src/ and its tests
 ├── requirements-dev.txt           flake8, black (code style)
 ├── .flake8  pyproject.toml        code style settings (flake8 runs in CI)

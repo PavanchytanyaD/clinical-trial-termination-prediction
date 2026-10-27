@@ -2,72 +2,81 @@
 
 Covers guideline section 3 (Data Bias Detection Using Data Slicing).
 
+**Data and run.** Every number in this report comes from one run of the pipeline's DVC stages
+(`dvc repro bias_model`: `acquire` → `preprocess` → `bias` → `bias_model`, run ID
+`realdata_2019`) on the real AACT database (snapshot of 2026-10-27), with the pipeline's
+real-data settings: interventional trials registered in 2019. The run's raw output is copied,
+unchanged, to [bias_report_evidence/](bias_report_evidence/).
+
 Bias is checked twice in every pipeline run:
 
 1. **Data level** (stage `bias`, sections 1–6): how many finished trials each group has and how
-   often they stop; small groups are reweighted.
+   often they stop; small groups are reweighted. Output: `Data-Pipeline/reports/bias/`.
 2. **Model level** (stage `bias_model`, section 7): a baseline model is trained and evaluated per
    group with Fairlearn, then mitigated two ways (training with the section 3 weights, and one
-   decision threshold per group).
-
-Source: full AACT pull, run with `input.limit: null`.
-Outputs (each run, in `Data-Pipeline/reports/bias/`): `data_summary.json`, `data_slices.csv`,
-`mitigation/mitigation_summary.json`, `mitigation/mitigation_before_after.csv`. The full-AACT run
-these sections quote is copied to [bias_data_full_aact/](bias_data_full_aact/).
+   decision threshold per group). Output: `Data-Pipeline/reports/bias_model/`.
 
 ## 1. Data and slices
 
 | | Count |
 |---|---|
-| Trials pulled | 608,221 |
-| Finished (label known) | 385,942 (63.5%) |
-| Unfinished (censored, no label) | 222,279 (36.5%) |
-| Overall stopped rate (finished trials) | 13.8% |
+| Trials (interventional, registered in 2019) | 24,236 |
+| Finished (label known) | 16,753 (69.1%) |
+| Unfinished (censored, no label) | 7,483 (30.9%) |
+| Overall stopped rate (finished trials) | 18.4% (3,089 stopped) |
 
 Our data is trial-level, so there are no patient demographics. We slice on trial
 attributes, using eligibility gender and age group as the closest demographic proxies.
 
 Slices: phase, study type, sponsor class, region, therapeutic area, gender, age group, start era.
+Study type has a single group here, because the run keeps interventional trials only.
 
 Flag rules (from `configs/bias_config.yaml`):
-- **Too small:** under 1% of finished trials (`min_share: 0.01`)
-- **Large gap:** stopped rate more than 10 points from the overall 13.8% (`max_rate_gap: 0.10`)
+- **Too small:** under 1% of finished trials (`min_share: 0.01`), here fewer than 168 trials
+- **Large gap:** stopped rate more than 10 points from the overall 18.4% (`max_rate_gap: 0.10`)
 
 ## 2. Bias found
 
 ### 2.1 Representation bias (groups too small)
 
-| Slice | Group | Share | Stopped rate |
-|---|---|---|---|
-| phase | EARLY_PHASE1 | 0.91% | 22.9% |
-| sponsor_class | FED | 0.99% | 12.4% |
-| sponsor_class | NETWORK | 0.91% | 15.8% |
-| sponsor_class | INDIV | 0.10% | 15.5% |
-| sponsor_class | AMBIG | <0.01% (3 trials) | 33.3% |
-| therapeutic_area | occupational diseases | 0.12% | 7.4% |
-| therapeutic_area | disorders of environmental origin | 0.01% (21 trials) | 4.8% |
-| study_type | EXPANDED_ACCESS | 0% finished | n/a |
+| Slice | Group | Finished trials | Share | Stopped rate |
+|---|---|---|---|---|
+| sponsor_class | NIH | 100 | 0.60% | 34.0% |
+| sponsor_class | NETWORK | 80 | 0.48% | 16.3% |
+| sponsor_class | INDIV | 8 | 0.05% | 12.5% |
+| therapeutic_area | occupational diseases | 25 | 0.15% | 20.0% |
+| start_era | 2000–2009 | 96 | 0.57% | 3.1% |
+| start_era | before 2000 | 9 | 0.05% | 0.0% |
 
-Groups named `UNKNOWN` (missing values) were also flagged in several slices. They are
-data-quality issues, not real subgroups, so they are not mitigated.
-
-`EXPANDED_ACCESS` has no finished trials, because expanded-access records do not use
-the completed/terminated statuses. It cannot get a label and is out of scope for the model.
+Groups named `UNKNOWN` (missing values) were also flagged in phase (16 trials), sponsor class
+(3) and gender (10). They are data-quality issues, not real subgroups, so they are not mitigated.
 
 ### 2.2 Stopped-rate gaps
 
-| Slice | Group | Stopped rate | Gap vs 13.8% |
+| Slice | Group | Stopped rate | Gap vs 18.4% |
 |---|---|---|---|
-| phase | PHASE1/PHASE2 | 27.6% | +13.8 pts |
-| start_era | UNKNOWN (no start date) | 24.1% | +10.4 pts |
-| sponsor_class | AMBIG | 33.3% | +19.5 pts (3 trials, noise) |
-| region | US_ONLY vs NON_US_ONLY | 19.7% vs 9.0% | not flagged against the overall rate, but a 2x difference between regions |
+| phase | PHASE1/PHASE2 | 37.6% | +19.1 pts |
+| phase | PHASE2 | 31.8% | +13.4 pts |
+| phase | PHASE2/PHASE3 | 29.3% | +10.8 pts |
+| therapeutic_area | hemic and lymphatic diseases | 35.8% | +17.4 pts |
+| therapeutic_area | neoplasms | 34.5% | +16.1 pts |
+| sponsor_class | NIH | 34.0% | +15.6 pts (also too small) |
+| region | US_AND_NON_US | 29.8% | +11.4 pts |
+| region | UNKNOWN (no country listed) | 29.1% | +10.7 pts |
+| start_era | 2010–2017 | 3.0% | −15.5 pts |
+| region | US_ONLY vs NON_US_ONLY | 24.3% vs 12.1% | not flagged against the overall rate, but a 2x difference between regions |
 
-### 2.3 Censoring bias
+Gender and age group show no flagged gaps (stopped rates 13.8%–18.9%).
 
-The share of unfinished trials rises from 9.5% (2000–2009) to 53.6% (2018 and later).
-Recent trials are therefore under-represented among labeled trials, so the data
-reflects older trial practice more than current practice.
+### 2.3 Censoring and registration bias
+
+- **Censoring:** 30.9% of the trials have not finished, so they have no label yet. The share is
+  highest for long or public trials (Phase 2/3 42.7%, other government sponsors 45.0%, NIH
+  43.5%), so the labeled data leans towards shorter trials.
+- **Registration lag:** trials registered in 2019 that started before 2018 were registered late,
+  often after they had already finished, and almost all of them completed (stopped rate 3.0% for
+  2010–2017). Their low rate most likely reflects how they entered the registry, not how older
+  trials behave.
 
 ## 3. Mitigation
 
@@ -76,8 +85,8 @@ reflects older trial practice more than current practice.
 | Small groups (≥100 trials) | Reweighting: each group lifted to a 1% share, weights capped at 10x | Gives small groups enough influence without inventing or duplicating data |
 | Small groups (<100 trials) | Not boosted, listed as limitations (`min_group_size: 100`) | Weighting a handful of trials up only amplifies noise |
 | `UNKNOWN` groups | Not boosted | Missing values, not real subgroups |
-| Stopped-rate gaps (phase, region) | Not changed | Likely real differences in how trials behave. Forcing equal rates would teach the model something false. Checked again at model level (section 6) |
-| Censoring of recent trials | Not fixable by resampling; documented | The labels do not exist yet. The time-based split already evaluates on recent trials |
+| Stopped-rate gaps (phase, area, region) | Not changed | Likely real differences in how trials behave. Forcing equal rates would teach the model something false. Checked again at model level (section 7) |
+| Censoring and registration lag | Not fixable by resampling; documented | The labels do not exist yet, and late registration is a property of the registry. The time-based split in section 7 evaluates on the most recent trials |
 
 Method: `src/bias/mitigate.py`, `compute_weights()`. A group with share *s* below the
 target *m* has its trials' weights multiplied by *m(1−s) / (s(1−m))*. This repeats until
@@ -89,45 +98,41 @@ for use as sample weights in model training.
 
 | Slice | Group | Trials | Share before | Share after | Mean weight |
 |---|---|---|---|---|---|
-| phase | EARLY_PHASE1 | 3,502 | 0.91% | 1.0% | 1.11 |
-| sponsor_class | FED | 3,833 | 0.99% | 1.0% | 1.01 |
-| sponsor_class | NETWORK | 3,511 | 0.91% | 1.0% | 1.10 |
-| sponsor_class | INDIV | 393 | 0.10% | 0.998% | 9.80 |
-| therapeutic_area | occupational diseases | 449 | 0.12% | 1.0% | 8.60 |
+| sponsor_class | NIH | 100 | 0.60% | 1.0% | 1.68 |
 
-Not boosted (too few trials): `AMBIG` sponsor (3 trials) and
-`disorders of environmental origin` (21 trials).
-
-All five boosted groups reached the 1% target. `INDIV` stopped just short (0.998%) because
-of the 10x cap, which is effectively at target.
+NIH is the only small group with at least 100 trials, so it is the only one boosted; it reached
+the 1% target. Not boosted (too few trials): `INDIV` (8), `NETWORK` (80),
+`occupational diseases` (25), start era `2000–2009` (96) and `before 2000` (9).
 
 ## 5. Trade-offs
 
 | | Before | After |
 |---|---|---|
-| Overall stopped rate | 13.80% | 13.77% |
-| Effective sample size | 385,942 | 336,675 (87.2%) |
-| Largest weight | 1.0 | 9.8 |
+| Overall stopped rate | 18.44% | 18.50% |
+| Effective sample size | 16,753 | 16,707 (99.7%) |
+| Largest weight | 1.0 | 1.68 |
 
 - The overall stopped rate barely moves, so reweighting does not distort the label balance.
-- Uneven weights reduce the effective sample size by about 13%. Most of this cost comes from
-  the two heavily boosted groups (`INDIV`, `occupational diseases`).
-- Lowering `max_weight` to 5 would cut this cost but leave those two groups below 1%.
-  We kept 10 as a balance between fair representation and information loss.
+- Only 100 trials get a weight above 1, so almost no information is lost (effective sample
+  size 99.7%).
 - Effect on model accuracy: measured with the baseline model in section 7. Reweighting leaves
-  it unchanged (PR-AUC 0.486 before and after), because the boosted groups are a few percent of
-  the trials.
+  it unchanged (PR-AUC 0.486 before and after), because the boosted group is 0.6% of the trials.
+- On the full AACT data (about 600,000 trials) more groups pass the 100-trial minimum and get
+  boosted; the same code and settings apply.
 
 ## 6. Limitations and next steps
 
 - **Model-level check:** done with a baseline model (section 7). Repeat it for the BioBERT
   model in the model development assignment: set `model.predictions_path` to its predictions.
-- **Missing start date:** trials with no start date stop at 24.1%, well above average.
-  The modeling team should check that start-date availability does not leak outcome
-  information (for example, withdrawn trials that never started).
-- **Tiny groups** (`AMBIG`, `disorders of environmental origin`) are too small for the model
-  to learn from and are reported, not mitigated.
-- **Re-run** on the cleaned preprocessing output once `input.source` switches from `aact` to `file`.
+- **Too few trials to mitigate:** `INDIV`, `NETWORK`, `occupational diseases` and the trials
+  that started before 2010 are reported, not mitigated. A larger registration window would give
+  them enough trials.
+- **Missing country:** trials with no country listed stop at 29.1%, and section 7 shows the
+  model finds them almost perfectly. The modeling team should check that this does not leak
+  the outcome (withdrawn trials lose their countries).
+- **Late registration:** decide in the model development assignment whether late-registered
+  trials (started before 2018) should be kept, because their outcome is mostly known when
+  they are registered.
 
 ## 7. Model-level check (baseline model)
 
@@ -194,8 +199,8 @@ already excluded as a leakage risk. Withdrawn trials lose their countries, and s
 still gives them away (most likely a missing-value pattern). This is not bias but a leakage
 warning: the modeling team should find that column before training the real model.
 
-**Outputs** (each run, in `Data-Pipeline/reports/bias_model/`; the 2019 run is copied to
-[`docs/bias_model_2019/`](bias_model_2019/)): `bias_model.md` (this report's tables),
+**Outputs** (each run, in `Data-Pipeline/reports/bias_model/`; this run's copy is in
+[`docs/bias_report_evidence/bias_model/`](bias_report_evidence/bias_model/)): `bias_model.md` (this report's tables),
 `model_slices.csv` (every group, every model), `model_gaps.csv`, `summary.json`.
 Settings: `params.yaml` section `bias_model` (test share, gap limit, minimum stopped trials,
 threshold slice) and `configs/bias_config.yaml` (slices, threshold 0.5, minimum group size 100).
