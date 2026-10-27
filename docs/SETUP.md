@@ -10,9 +10,8 @@ tells you it worked.
 | [2. Email alerts](#2-email-alerts) | an email when data looks wrong or a task fails | every run |
 
 **Only want the alert emails?** You do not need to set anything up: send
-your address to whoever runs the pipeline (on this project, Pavanchytanya).
-They add it to the subscriber list (`ALERT_EMAIL_TO`, section 2.4) and you
-get every alert from the next run on.
+your address to whoever runs the pipeline. They add it to the subscriber
+list (section 2.7) and you get every alert from the next task on.
 
 All secrets go into one file, `Data-Pipeline/.env`, created from the example
 and never committed (it is in `.gitignore`):
@@ -112,10 +111,22 @@ The pipeline emails every subscriber when something needs a person:
 | Failed task | a pipeline task fails its last attempt (each task is retried twice first) | `[ctt-data-pipeline] task bias failed` |
 
 A failed-task email names the run, the task and the error, and includes the
-last lines of the task's log. Alerts are sent through a Gmail account with
-an app password: a 16-character password Google generates for one app, so
-the account's own password is never stored. It needs about 3 minutes and a
-Gmail account with 2-Step Verification on.
+last lines of the task's log. A data-problem email lists the failed checks.
+
+**How we set it up.** One Gmail account sends the alerts, signed in with an
+app password: a 16-character password Google generates for one app, so the
+account's own password is never stored. The subscribers are a
+comma-separated list of addresses. Both go into `Data-Pipeline/.env`, and
+the same file feeds both ways of running the pipeline:
+
+| Way | How the pipeline gets the settings |
+|---|---|
+| Local Docker Airflow | `./local/pipeline.sh up` passes `.env` to the containers, and every task inherits it |
+| Cloud Composer | `./composer/deploy.sh up` (or `secret`) copies the `SMTP_*`, `ALERT_*` and `AACT_*` lines into the Kubernetes secret `ctt-pipeline-secrets`, which every task pod reads |
+
+The emails are sent by the pipeline's own code (`Data-Pipeline/scripts/alerts.py`),
+so no mail server or Airflow email setting is needed. Setting it up takes
+about 5 minutes and a Gmail account with 2-Step Verification on.
 
 **2.1 Open App passwords** at <https://myaccount.google.com/apppasswords>
 with the Gmail account that should send the alerts. Google asks for that
@@ -146,13 +157,13 @@ ALERT_EMAIL_TO=you@gmail.com,teammate@example.com
 |---|---|
 | `SMTP_USER`, `ALERT_EMAIL_FROM` | the Gmail account from 2.1 |
 | `SMTP_PASSWORD` | the app password from 2.2 (the spaces may stay) |
-| `ALERT_EMAIL_TO` | the subscribers, comma-separated; to add someone later, append their address and run `./composer/deploy.sh secret` (Google Cloud) or `./local/pipeline.sh up` (local) |
+| `ALERT_EMAIL_TO` | the subscribers, comma-separated (section 2.7 adds or removes one later) |
 
 `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587` and `SMTP_STARTTLS=true` are
 already set for Gmail.
 
-**Check:** from `Data-Pipeline/`, with its requirements installed, this sends
-one test email to every subscriber:
+**2.5 Send a test email.** From `Data-Pipeline/`, with its requirements
+installed, this sends one test email to every subscriber:
 
 ```bash
 python -c "from scripts.alerts import send_alert; print(send_alert('Test alert', 'Email alerts work.'))"
@@ -163,3 +174,72 @@ python -c "from scripts.alerts import send_alert; print(send_alert('Test alert',
 | `True`, and the email arrives (check spam) | done |
 | `False` with `Username and Password not accepted` | the account's normal password was used, or the app password belongs to another account |
 | `False` with `alert not emailed (SMTP not configured)` | a line in 2.4 is empty |
+
+Without Python on your machine, run the same check in the local Airflow
+container (after `./local/pipeline.sh up`):
+
+```bash
+docker compose -p ctt-data-pipeline exec -T scheduler bash -c "cd /opt/ctt/Data-Pipeline && /opt/airflow/pipeline-venv/bin/python -c \"from scripts.alerts import send_alert; print(send_alert('Test alert', 'Email alerts work.'))\""
+```
+
+**2.6 Turn the alerts on in the pipeline.** The pipeline reads `.env` when
+it starts, so after filling it in, run one of these from `Data-Pipeline/`.
+
+Running locally: restart the Airflow containers with the new settings
+(runs and history are kept).
+
+```bash
+./local/pipeline.sh up
+```
+
+Running on Google Cloud: update the secret `ctt-pipeline-secrets`. The
+next task pod picks it up; nothing restarts.
+
+```bash
+./composer/deploy.sh secret
+```
+
+**2.7 Subscribe or unsubscribe someone.** Edit the list in
+`Data-Pipeline/.env`, then apply it with the command from 2.6:
+
+```
+ALERT_EMAIL_TO=you@gmail.com,new.member@northeastern.edu
+```
+
+Removing an address unsubscribes it the same way. Every subscriber gets
+every alert; there is nothing to install or sign up for on their side.
+
+**2.8 What the alerts look like.** We tested the alerts end to end by
+running the local pipeline on a snapshot that is too small (50 trials;
+the schema requires at least 100 rows):
+
+```bash
+SNAPSHOT=20261027 SAMPLE_TRIALS=50 ./local/pipeline.sh trigger
+```
+
+`validate` found 50 rows, failed its critical row-count check and stopped
+the pipeline; `publish` never ran, so nothing from that snapshot was
+recorded. These emails reached the subscriber (times in the inbox are US
+Eastern; the run ran at 03:07–03:36 UTC on 2026-10-27):
+
+![Gmail inbox with the pipeline alerts](setup/alert_1_inbox.png)
+
+- **3 × "validation critical"**: one per attempt of `validate` (Airflow
+  retries a task twice before giving up).
+- **1 × "task validate failed"**: after the last attempt, with the error
+  and the end of both task logs.
+- **"Test alert"**: from the test command in 2.5. The older
+  "task acquire … failed" email is from an earlier test where we passed the
+  task's arguments wrongly; it shows the same failure alert for another task.
+
+The "validation critical" email lists the failed check and where the full
+report is:
+
+![Validation critical email](setup/alert_3_validation_critical.png)
+
+The "task validate failed" email (first part; the rest of the log follows
+below it in the email) has the run, the attempt, the error and the last
+lines of the logs, so the failure can be read without opening Airflow:
+
+![Task failed email](setup/alert_2_task_failed.png)
+

@@ -1,8 +1,6 @@
 # Bias Detection and Mitigation Report
 
 Covers guideline section 3 (Data Bias Detection Using Data Slicing).
-Parts 1–2 (detection and slicing): Danush. Parts 3–4 (mitigation and documentation): Atharva.
-Section 7 (model-level check with a baseline model): Pavanchytanya.
 
 Bias is checked twice in every pipeline run:
 
@@ -128,7 +126,7 @@ of the 10x cap, which is effectively at target.
   information (for example, withdrawn trials that never started).
 - **Tiny groups** (`AMBIG`, `disorders of environmental origin`) are too small for the model
   to learn from and are reported, not mitigated.
-- **Re-run** on Nithish's cleaned data once `input.source` switches from `aact` to `file`.
+- **Re-run** on the cleaned preprocessing output once `input.source` switches from `aact` to `file`.
 
 ## 7. Model-level check (baseline model)
 
