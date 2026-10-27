@@ -580,7 +580,14 @@ Findings, both mitigations and the trade-offs: [docs/bias_report.md](docs/bias_r
 
 ## Team
 
-Atharva Nilesh Mahadik · Danush Gopinath · Nithish Bhat · Pavanchytanya Dharmapuri · Sathyasai Rajan · Sivapriya Sugumaran
+| Name | GitHub |
+|---|---|
+| Atharva Nilesh Mahadik | [@atharvamahadik](https://github.com/atharvamahadik) |
+| Danush Gopinath | [@danushgopinath](https://github.com/danushgopinath) |
+| Nithish Bhat | [@NithishBhat](https://github.com/NithishBhat) |
+| Pavanchytanya Dharmapuri | [@PavanchytanyaD](https://github.com/PavanchytanyaD) |
+| Sathyasai Rajan | [@sathyaa23](https://github.com/sathyaa23) |
+| Sivapriya Sugumaran | [@Sivapriya2123](https://github.com/Sivapriya2123) |
 
 ## Data rights
 
