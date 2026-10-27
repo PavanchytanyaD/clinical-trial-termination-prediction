@@ -5,10 +5,9 @@ venv/
 .env
 *.env
 service-account*.json
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# outputs of src/ scripts run by hand from the repository root
+/data/
+/reports/
 mlruns/
 logs/
 .ipynb_checkpoints/

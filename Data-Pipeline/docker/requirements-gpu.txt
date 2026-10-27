@@ -1,5 +1,5 @@
 # BioBERT worker image (docker/Dockerfile.gpu). torch 2.6.0 comes with the
-# base image; the others match the root requirements.txt and requirements.txt.
+# base image; the others match the root and Data-Pipeline requirements.txt.
 transformers==5.5.0
 numpy==2.3.3
 pyyaml==6.0.3

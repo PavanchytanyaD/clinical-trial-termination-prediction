@@ -1,4 +1,4 @@
-# Pipeline steps (in the Composer pods and in the VM's Airflow container).
+# Pipeline steps (the image for the Composer pods; the local Airflow image too).
 # Python 3.11 or later, same as the repository's requirements.txt.
 numpy==2.3.3
 pandas==3.0.1
@@ -9,7 +9,7 @@ dvc[gs]==3.63.0
 # dvc 3.63 breaks with pathspec 1.x (removed _DIR_MARK)
 pathspec==0.12.1
 google-cloud-storage==3.17.1
-# bias stage (src/bias, same pins as requirements-bias.txt)
+# bias stage (src/bias, same pins as the root requirements.txt)
 scikit-learn==1.9.1
 fairlearn==0.15.0
 # AACT database source for acquire.source: db (src/ingestion/fetch_aact.py)

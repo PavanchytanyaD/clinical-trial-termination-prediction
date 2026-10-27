@@ -68,7 +68,7 @@ does not reformat other people's open work.
 ## Tests
 
 ~~~bash
-pip install -r requirements.txt -r requirements-bias.txt -r requirements-dev.txt
+pip install -r requirements.txt -r requirements-dev.txt
 pytest                                   # src/ code: tests/
 cd Data-Pipeline && pip install -r requirements.txt && pytest   # pipeline: Data-Pipeline/tests/
 ~~~

@@ -11,8 +11,9 @@ Bias is checked twice in every pipeline run:
    decision threshold per group).
 
 Source: full AACT pull, run with `input.limit: null`.
-Outputs: `reports/bias/data_summary.json`, `reports/bias/data_slices.csv`,
-`reports/bias/mitigation/mitigation_summary.json`, `reports/bias/mitigation/mitigation_before_after.csv`.
+Outputs (each run, in `Data-Pipeline/reports/bias/`): `data_summary.json`, `data_slices.csv`,
+`mitigation/mitigation_summary.json`, `mitigation/mitigation_before_after.csv`. The full-AACT run
+these sections quote is copied to [bias_data_full_aact/](bias_data_full_aact/).
 
 ## 1. Data and slices
 
