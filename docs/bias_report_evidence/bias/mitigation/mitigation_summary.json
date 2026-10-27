@@ -1,0 +1,51 @@
+{
+  "method": "reweight",
+  "n_trials": 16753,
+  "effective_sample_size": 16707.2,
+  "overall_stopped_rate_before": 0.1844,
+  "overall_stopped_rate_after": 0.185,
+  "max_weight_used": 1.675,
+  "min_group_size": 100,
+  "boosted_groups": [
+    {
+      "slice": "sponsor_class",
+      "group": "NIH",
+      "n_trials": 100,
+      "share_before": 0.005969080164746613,
+      "mean_weight": 1.6753
+    }
+  ],
+  "too_few_to_mitigate": [
+    {
+      "slice": "sponsor_class",
+      "group": "INDIV",
+      "n_trials": 8,
+      "share": 0.000477526413179729
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "NETWORK",
+      "n_trials": 80,
+      "share": 0.00477526413179729
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "occupational diseases",
+      "n_trials": 25,
+      "share": 0.0014922700411866532
+    },
+    {
+      "slice": "start_era",
+      "group": "2000-2009",
+      "n_trials": 96,
+      "share": 0.0057303169581567484
+    },
+    {
+      "slice": "start_era",
+      "group": "before 2000",
+      "n_trials": 9,
+      "share": 0.0005372172148271951
+    }
+  ],
+  "still_too_small": []
+}

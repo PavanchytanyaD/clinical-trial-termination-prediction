@@ -410,16 +410,14 @@ More: [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md). CI/C
 ## Bias detection and mitigation
 
 > [!IMPORTANT]
-> **The bias report is [docs/bias_report.md](docs/bias_report.md).** It is the only report: what bias we found, how we mitigated it, and the trade-offs. [docs/bias_report_evidence/](docs/bias_report_evidence/) holds the raw pipeline output it quotes, so every number can be checked.
+> **The bias report is [docs/bias_report.md](docs/bias_report.md).** It is the only report: what bias we found, how we mitigated it, and the trade-offs. It is based on one pipeline run on the real AACT data (interventional trials registered in 2019, 24,236 trials); [docs/bias_report_evidence/](docs/bias_report_evidence/) holds that run's raw output, so every number can be checked.
 
 Bias is checked in every pipeline run, at two levels. The data is trial-level (no patients), so the slices are trial attributes: phase, study type, sponsor class, region, therapeutic area, eligible gender, eligible age group and start era.
 
 | Level | Stage | What it checks | Main finding | Mitigation |
 |---|---|---|---|---|
-| Data | `bias` | Groups too small to learn from; stopped rates far from the overall 13.8% | Several groups under 1% of finished trials (e.g. early phase 1, individual sponsors); US-only trials stop twice as often as non-US | 5 of them reweighted up to a 1% share (`trial_weights.csv`; groups under 100 trials are too small to boost); real rate differences left as they are |
+| Data | `bias` | Groups too small to learn from; stopped rates far from the overall 18.4% | 6 groups under 1% of finished trials (e.g. NIH and individual sponsors); Phase 2 and cancer trials stop far more often; US-only trials stop twice as often as non-US | NIH reweighted up to a 1% share (`trial_weights.csv`); the other 5 have under 100 trials, too few to boost; real rate differences left as they are |
 | Model | `bias_model` | A baseline model's recall and PR-AUC in each group (Fairlearn) | Recall differs by 0.32 between regions | One decision threshold per region: gap 0.32 → 0.13, at a cost of 0.03 PR-AUC |
-
-Sections 1–6 of the report use the full AACT pull (608,221 trials); section 7 uses the trials registered in 2019 (24,236), the data the pipeline runs on.
 
 ---
 

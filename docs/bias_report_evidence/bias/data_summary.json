@@ -1,0 +1,146 @@
+{
+  "n_trials": 24236,
+  "n_finished": 16753,
+  "n_unfinished": 7483,
+  "overall_stopped_rate": 0.1844,
+  "min_share": 0.01,
+  "max_rate_gap": 0.1,
+  "flagged_groups": [
+    {
+      "slice": "phase",
+      "group": "PHASE1/PHASE2",
+      "share": 0.0286,
+      "stopped_rate": 0.3758,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "phase",
+      "group": "PHASE2",
+      "share": 0.1083,
+      "stopped_rate": 0.3185,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "phase",
+      "group": "PHASE2/PHASE3",
+      "share": 0.0108,
+      "stopped_rate": 0.2928,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "phase",
+      "group": "UNKNOWN",
+      "share": 0.001,
+      "stopped_rate": 0.125,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "INDIV",
+      "share": 0.0005,
+      "stopped_rate": 0.125,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "NETWORK",
+      "share": 0.0048,
+      "stopped_rate": 0.1625,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "NIH",
+      "share": 0.006,
+      "stopped_rate": 0.34,
+      "too_small": true,
+      "large_gap": true
+    },
+    {
+      "slice": "sponsor_class",
+      "group": "UNKNOWN",
+      "share": 0.0002,
+      "stopped_rate": 0.0,
+      "too_small": true,
+      "large_gap": true
+    },
+    {
+      "slice": "region",
+      "group": "UNKNOWN",
+      "share": 0.0541,
+      "stopped_rate": 0.2911,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "region",
+      "group": "US_AND_NON_US",
+      "share": 0.0557,
+      "stopped_rate": 0.298,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "hemic and lymphatic diseases",
+      "share": 0.0404,
+      "stopped_rate": 0.3575,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "neoplasms",
+      "share": 0.1307,
+      "stopped_rate": 0.3452,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "therapeutic_area",
+      "group": "occupational diseases",
+      "share": 0.0015,
+      "stopped_rate": 0.2,
+      "too_small": true,
+      "large_gap": false
+    },
+    {
+      "slice": "gender",
+      "group": "UNKNOWN",
+      "share": 0.0006,
+      "stopped_rate": 0.0,
+      "too_small": true,
+      "large_gap": true
+    },
+    {
+      "slice": "start_era",
+      "group": "2000-2009",
+      "share": 0.0057,
+      "stopped_rate": 0.0312,
+      "too_small": true,
+      "large_gap": true
+    },
+    {
+      "slice": "start_era",
+      "group": "2010-2017",
+      "share": 0.1082,
+      "stopped_rate": 0.0298,
+      "too_small": false,
+      "large_gap": true
+    },
+    {
+      "slice": "start_era",
+      "group": "before 2000",
+      "share": 0.0005,
+      "stopped_rate": 0.0,
+      "too_small": true,
+      "large_gap": true
+    }
+  ]
+}
