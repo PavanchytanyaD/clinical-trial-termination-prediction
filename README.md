@@ -525,7 +525,7 @@ clinical-trial-termination-prediction/
 │   └── logging_utils.py       logging for src scripts
 ├── configs/bias_config.yaml   bias settings
 ├── tests/                     tests for src/
-├── docs/                      setup guide, bias report, screenshots, scoping document
+├── docs/                      setup guide, bias report, screenshots
 └── requirements*.txt          pinned dependencies
 ```
 
