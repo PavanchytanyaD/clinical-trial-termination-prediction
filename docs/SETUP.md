@@ -146,7 +146,7 @@ ALERT_EMAIL_TO=you@gmail.com,teammate@example.com
 |---|---|
 | `SMTP_USER`, `ALERT_EMAIL_FROM` | the Gmail account from 2.1 |
 | `SMTP_PASSWORD` | the app password from 2.2 (the spaces may stay) |
-| `ALERT_EMAIL_TO` | the subscribers, comma-separated; to add someone later, append their address and run `./composer/deploy.sh secret` |
+| `ALERT_EMAIL_TO` | the subscribers, comma-separated; to add someone later, append their address and run `./composer/deploy.sh secret` (Google Cloud) or `./local/pipeline.sh up` (local) |
 
 `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587` and `SMTP_STARTTLS=true` are
 already set for Gmail.

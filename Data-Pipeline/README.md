@@ -8,7 +8,7 @@ ties every part of the data pipeline assignment together:
 | 1. Data acquisition | `scripts/acquire.py` calls `../src/ingestion/fetch_aact.py` |
 | 2. Data preprocessing | `scripts/preprocess.py` calls `../src/features/structured_features.py` |
 | 3. Test modules | `tests/` here and `../tests/` |
-| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`, on Cloud Composer (`composer/`) |
+| 4. Pipeline orchestration (Airflow DAGs) | `dags/ctt_data_pipeline.py`, on Cloud Composer (`composer/`) or Airflow in Docker (`local/`) |
 | 5. Data versioning with DVC | `dvc.yaml`, `dvc.lock`, `.dvc/config` (GCS remote) |
 | 6. Tracking and logging | `scripts/tracking.py`, `scripts/alerts.py` |
 | 7. Data schema and statistics generation | `scripts/schema_stats.py`, `scripts/validate.py`, `schema/` |
@@ -18,13 +18,22 @@ ties every part of the data pipeline assignment together:
 | BioBERT text embeddings | `scripts/text.py`, `scripts/embeddings.py` call `../src/features/`; GPU job on Vertex AI |
 
 The stages call the team's shared code in `../src/` (ingestion, features,
-bias, error handling). Everything runs on Google Cloud (project
-`ctt-mlops-project`): GitHub Actions tests every push and builds the images
-into Artifact Registry, Cloud Composer orchestrates and runs each step as a
-pod from that image, data versions live in the GCS bucket
-`gs://ctt-mlops-project-data`, and BioBERT runs as a Vertex AI GPU job. Without AACT credentials, `acquire`
-writes a seeded test snapshot in the AACT format, so the whole pipeline can
-still be exercised end to end.
+bias, error handling). The same DAG runs in two places:
+
+- **Google Cloud**, our deployment (project `ctt-mlops-project`). GitHub
+  Actions tests every push and builds the images into Artifact Registry.
+  Cloud Composer orchestrates and runs each step as a pod from that image.
+  Data versions live in the GCS bucket `gs://ctt-mlops-project-data`, and
+  BioBERT runs as a Vertex AI GPU job. Anyone can deploy it in their own
+  project with `composer/deploy.sh`. Both are shown in
+  [../docs/cloud_deployment.md](../docs/cloud_deployment.md), with
+  screenshots from a run.
+- **One machine**: Airflow in Docker (`local/`). The run state and the DVC
+  remote are folders in `local/output/`, and BioBERT runs on the CPU, so no
+  cloud account is needed ([local/README.md](local/README.md)).
+
+Without AACT credentials, `acquire` writes a seeded test snapshot in the
+AACT format, so the whole pipeline can still be exercised end to end.
 
 ## How it fits together
 
@@ -83,14 +92,27 @@ Data-Pipeline/
 |- docker/Dockerfile           image the Composer tasks run
 |- docker/Dockerfile.gpu       BioBERT image the Vertex AI GPU job runs
 |- composer/                   Cloud Composer: setup, up, trigger, down (deploy.sh)
+|- local/                      Airflow in Docker on one machine (pipeline.sh,
+|                              docker-compose.yaml, run_task.sh)
 |- dvc.yaml, params.yaml       DVC stages and their parameters
 |- dvc.lock                    hash of every output: the current data version
 |- requirements.txt, .env.example
 ```
 
 `data/`, `reports/`, `schema/generated/` and `logs/` are produced inside each
-task and never committed: DVC stores the data in the GCS remote, and the run
-state folder in GCS keeps the logs, reports and the latest `dvc.lock`.
+task and never committed. DVC stores the data in the remote, and the run
+state folder keeps the logs, reports and the latest `dvc.lock`. On Google
+Cloud both are in the GCS bucket; locally they are in `local/output/`.
+
+## Run it on your machine
+
+```bash
+./local/pipeline.sh up        # Airflow in Docker at http://localhost:8080
+./local/pipeline.sh trigger   # one run on the test snapshot; waits for it
+./local/pipeline.sh down
+```
+
+Details: [local/README.md](local/README.md).
 
 ## Run it on Google Cloud
 
@@ -123,7 +145,9 @@ gcloud auth login && gcloud config set project ctt-mlops-project
 ./composer/deploy.sh down      # snapshot Airflow's history, delete Composer
 ```
 
-Details: [composer/README.md](composer/README.md).
+Details: [composer/README.md](composer/README.md). To deploy it in your own
+Google Cloud project, set `PROJECT` and follow
+[../docs/cloud_deployment.md](../docs/cloud_deployment.md#2-deploy-it-in-your-own-project).
 
 **Real AACT data:** put `AACT_USER` and `AACT_PASSWORD` in
 `Data-Pipeline/.env` (from `.env.example`); `up` stores them as a Composer
@@ -145,7 +169,9 @@ custom job on an `n1-standard-8` with one T4 GPU running the image
 it, and downloads the result. If the task is stopped or times out, the job
 is cancelled, so no GPU is left running. `params.yaml` (section
 `embeddings`) sets the machine and model settings; `max_trials` embeds only
-the first N trials for a quick test.
+the first N trials for a quick test. In the local Docker Airflow
+(`PIPELINE_EMBEDDINGS=local`), the stage runs BioBERT on the CPU in the task
+itself instead.
 
 ## 4. Pipeline orchestration (Airflow)
 
@@ -156,24 +182,30 @@ the first N trials for a quick test.
   `validate`, then `publish` (see the diagram above). It runs on the 5th of every month at 06:00 UTC (after the monthly AACT export), or
   triggered by hand with a config such as
   `{"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}`.
-- Every task is a `KubernetesPodOperator`: a pod from the pipeline image
-  (`docker/Dockerfile`) that runs one DVC stage with
+- On Composer, every task is a `KubernetesPodOperator`: a pod from the
+  pipeline image (`docker/Dockerfile`) that runs one DVC stage with
   `python -m scripts.run_stage <stage>`. Airflow only orchestrates, and the
   pipeline's libraries never clash with Composer's own Airflow packages.
-- A second DAG, `ctt_freeze_baseline`, runs `run_stage freeze` in one pod
-  (`./composer/deploy.sh freeze`).
+- In the local Docker Airflow (`CTT_RUNNER=local`), every task is a
+  `BashOperator` running `local/run_task.sh <stage>`. It copies the code to
+  a fresh folder and runs the same command there, with the pipeline's
+  libraries in their own virtualenv.
+- A second DAG, `ctt_freeze_baseline`, runs `run_stage freeze` as one task
+  (`./composer/deploy.sh freeze` or `./local/pipeline.sh freeze`).
 - 2 retries with exponential backoff, a timeout per task and per run,
   `max_active_runs=1` (stages share `dvc.lock`), and an email to
   `CTT_ALERT_EMAILS` when a task fails.
 - `validate` and `anomalies` exit with an error on critical data problems,
   so the run stops before `publish` and no bad data version is recorded.
 - Parallel tasks are safe with DVC: each task merges only its own stage
-  into the shared `dvc.lock` in GCS with a conditional write that is retried
-  when another task wrote first.
+  into the shared `dvc.lock` with a conditional write that is retried when
+  another task wrote first. In GCS the condition is the object's
+  generation; in a local folder it is a file lock and the file's hash.
 
 Because every task starts from a fresh copy of the code, `run_stage.py`
-keeps the run's shared files in GCS (`CTT_STATE_URI`, default
-`gs://ctt-mlops-project-data/data-pipeline/state`): it downloads
+keeps the run's shared files in a state folder (`CTT_STATE_URI`, default
+`gs://ctt-mlops-project-data/data-pipeline/state`; `local/output/state` in
+the local Docker Airflow): it downloads
 `params.yaml`, the latest `dvc.lock` and the baseline and pulls the stage's
 inputs before the stage, then pushes the outputs and uploads `dvc.lock`,
 logs and reports afterwards (logs and reports also when the stage fails).
@@ -193,12 +225,15 @@ logs and reports afterwards (logs and reports also when the stage fails).
 ### DVC remote
 
 The remote is `gs://ctt-mlops-project-data/dvc-store` (`.dvc/config`). The
-Composer pods reach it as `pipeline-sa`, without keys.
+Composer pods reach it as `pipeline-sa`, without keys. `PIPELINE_DVC_REMOTE`
+replaces it for one run without touching `.dvc/config`. `deploy.sh` sets it
+to `gs://<your bucket>/dvc-store` in another project, and the local Docker
+Airflow sets it to `local/output/dvc-store`.
 
 Every run writes its data version to the state folder:
 `state/versions/<snapshot>/<run_id>.json` (output hashes and the validation
 summary) and `state/versions/<snapshot>/dvc.lock`. Restoring a version is a
-`dvc pull` with that `dvc.lock`, in a pod.
+`dvc pull` with that `dvc.lock`.
 
 ## 6. Tracking and logging
 
@@ -257,8 +292,9 @@ Freeze a baseline after a run on a snapshot you trust:
 REASON="first real AACT snapshot" ./composer/deploy.sh freeze
 ```
 
-It is stored in `state/baseline/` in the bucket, and every task downloads it
-before running, so all later runs validate against it.
+It is stored in `state/baseline/` in the state folder (`./local/pipeline.sh
+freeze` locally), and every task downloads it before running, so all later
+runs validate against it.
 
 Until a baseline is frozen, `validate` checks the snapshot against its own
 suite and says so in the report.
@@ -325,22 +361,27 @@ records and alert emails say what kind of failure happened.
 pip install -r requirements.txt && pytest
 ```
 
-60 tests cover the test snapshot and features, statistics values, the
+77 tests cover the test snapshot and features, statistics values, the
 inferred schema, every critical and warning check (a dropped column,
 duplicate or malformed ids, an invalid label, out-of-range values), drift
 detection, every anomaly check, the bias stage, the text stage, the Vertex AI
-job (spec, polling, cancel on stop, the round trip through the bucket), the
-fail and alert policies, run records, email alerts (with a fake SMTP
-server), parameter overrides, the `dvc.lock` merge under concurrent writes,
-the stage graph, and the DAG shape on both GCP runners (the 4 DAG tests need
-Airflow installed and are skipped otherwise). Google Cloud is faked in the
-tests, so they need no credentials.
+job (spec, CPU-only spec, polling, cancel on stop, the round trip through the
+bucket, settings from the environment), the local BioBERT backend, the fail
+and alert policies, run records, email alerts (with a fake SMTP server),
+parameter overrides, the `dvc.lock` merge under concurrent writes (GCS and
+a local state folder), the DVC remote override, the stage graph, and the DAG
+on both runners (the 5 DAG tests need Airflow installed and are skipped
+otherwise). Google Cloud is faked in the tests, so they need no credentials.
 
 ## Reproducibility
 
-Anyone with access to `ctt-mlops-project` can rebuild the whole setup from
-the repository: push to build the images (or `deploy.sh image` and
-`gpu-image`), `./composer/deploy.sh setup` and `up`, then trigger a run. The test snapshot is seeded, so the same
-parameters give the same files and the same `dvc.lock` hashes, and every
-run's `dvc.lock` stays in `state/versions/` in the bucket, so the exact data
-of any run can be pulled again from the DVC remote.
+- **Any machine with Docker:** `./local/pipeline.sh up` and `trigger`
+  rebuild and run the whole pipeline with no account
+  ([local/README.md](local/README.md)).
+- **Any Google Cloud project:** `PROJECT=<id> ./composer/deploy.sh setup`,
+  `image`, `gpu-image`, `up`, `trigger`
+  ([../docs/cloud_deployment.md](../docs/cloud_deployment.md)).
+- The test snapshot is seeded, so the same parameters give the same files
+  and the same `dvc.lock` hashes in both places. Every run's `dvc.lock`
+  stays in `state/versions/`, so the exact data of any run can be pulled
+  again from the DVC remote.

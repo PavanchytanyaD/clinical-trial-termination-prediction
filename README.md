@@ -21,7 +21,10 @@ The data pipeline runs every month: it fetches an AACT snapshot, builds the feat
                +--> text --> embeddings (Vertex AI GPU) -----------+
 ```
 
-It runs entirely on Google Cloud (project `ctt-mlops-project`): GitHub Actions tests every push and builds the container images into Artifact Registry, Cloud Composer orchestrates and runs each step as a pod from that image, every data version is kept in a GCS bucket through DVC, and the embeddings run as a Vertex AI T4 GPU job. See [Data-Pipeline/README.md](Data-Pipeline/README.md#run-it-on-google-cloud).
+The same code and DAG run in two places:
+
+- **Google Cloud** (our deployment, project `ctt-mlops-project`): GitHub Actions tests every push and builds the container images into Artifact Registry. Cloud Composer orchestrates and runs each step as a pod from that image. Every data version is kept in a GCS bucket through DVC, and the embeddings run as a Vertex AI T4 GPU job. [docs/cloud_deployment.md](docs/cloud_deployment.md) shows our deployment with screenshots from a run and how to deploy it in your own project.
+- **Your machine**: Airflow in Docker with the same DAG. The run state and the DVC remote are local folders and BioBERT runs on the CPU, so no cloud account is needed. See [Data-Pipeline/local/README.md](Data-Pipeline/local/README.md).
 
 | Guideline item | Where | Owner |
 |---|---|---|
@@ -35,12 +38,12 @@ It runs entirely on Google Cloud (project `ctt-mlops-project`): GitHub Actions t
 | 8. Anomaly detection and alerts | `Data-Pipeline/scripts/anomalies.py` | Pavanchytanya |
 | 9. Pipeline flow optimization | `Data-Pipeline/docs/pipeline_optimization.md` | Pavanchytanya |
 | Text and BioBERT embeddings stages | `src/features/build_text_sample.py`, `biobert_embeddings.py` (Nithish); `Data-Pipeline/scripts/text.py`, `embeddings.py`, Vertex AI job (Pavanchytanya) | Nithish, Pavanchytanya |
-| Cloud hosting and CI/CD | `.github/workflows/ci.yml`, `Data-Pipeline/composer/`, `docker/` | Pavanchytanya |
+| Cloud hosting, local Docker Airflow and CI/CD | `.github/workflows/ci.yml`, `Data-Pipeline/composer/`, `Data-Pipeline/local/`, `docker/` | Pavanchytanya |
 | Bias detection and slicing | `src/bias/slicing.py`, `slice_report.py`, `model_slices.py` | Danush, Atharva |
 | Bias mitigation and report | `src/bias/mitigate.py`, `docs/bias_report.md` | Atharva, Danush |
 | Error handling, code style, contributing | `src/error_handling.py`, `.flake8`, `CONTRIBUTING.md` | Sathyasai |
 
-Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md); CI is in [.github/workflows/ci.yml](.github/workflows/ci.yml) and Cloud Composer in [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
+Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md); CI is in [.github/workflows/ci.yml](.github/workflows/ci.yml), Cloud Composer in [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md) and the local Docker Airflow in [Data-Pipeline/local/README.md](Data-Pipeline/local/README.md).
 
 ## Code structure
 
@@ -54,6 +57,7 @@ clinical-trial-termination-prediction/
 |  |- schema/baseline/       how the validation baseline (kept in GCS) is frozen
 |  |- docs/                  pipeline optimization note and Gantt charts
 |  |- composer/              Cloud Composer: setup, up, trigger, down; image builds
+|  |- local/                 Airflow in Docker on one machine: up, trigger, down
 |  |- docker/                pipeline image (Composer pods), BioBERT GPU image (Vertex AI)
 |  |- dvc.yaml, params.yaml  DVC stages and their parameters
 |  \- README.md
@@ -65,42 +69,54 @@ clinical-trial-termination-prediction/
 |  \- logging_utils.py       console and file logging for src scripts
 |- configs/bias_config.yaml  bias slicing and mitigation settings
 |- tests/                    tests for src/
-|- docs/                     scoping document, diagrams, bias report
+|- docs/                     scoping document, cloud deployment (with screenshots), setup guide, bias report
 |- requirements*.txt         dependencies of the images and the tests
 \- CONTRIBUTING.md           logging, error handling, code style, branches
 ```
 
-## Setup
+## Run the pipeline
 
-Everything runs in the Google Cloud project `ctt-mlops-project`; you need a Google account with access to it, Git, and the Google Cloud CLI.
+Pick one of the two ways. Both run the same DAG on the seeded test snapshot
+by default. With AACT credentials in `Data-Pipeline/.env`
+([docs/SETUP.md](docs/SETUP.md)), both can run on the live AACT database too
+(`SOURCE=db`).
+
+**On your machine** (Docker; no cloud account):
 
 ```bash
 git clone https://github.com/PavanchytanyaD/clinical-trial-termination-prediction.git
 cd clinical-trial-termination-prediction/Data-Pipeline
-gcloud auth login && gcloud config set project ctt-mlops-project
-./composer/deploy.sh setup       # once per project: APIs, bucket, roles
-cp .env.example .env             # AACT account and SMTP settings (never committed)
+./local/pipeline.sh up           # Airflow at http://localhost:8080 (admin / admin)
+./local/pipeline.sh trigger      # one run; results in local/output/
+./local/pipeline.sh down
 ```
 
-## Run the pipeline
+Details: [Data-Pipeline/local/README.md](Data-Pipeline/local/README.md).
 
-Code reaches the pipeline through GitHub: every push runs the style check and all tests, and pushes to `main` or `pavan/integration` then build the images Composer and Vertex AI run.
+**On Google Cloud, in your own project** (gcloud CLI; billing enabled):
 
 ```bash
-./composer/deploy.sh up          # create Composer (about 25 min), restore its history
-./composer/deploy.sh trigger     # one run on the seeded test snapshot
-SOURCE=db ./composer/deploy.sh trigger   # one run on the live AACT database
-./composer/deploy.sh down        # save Airflow's history, delete Composer (billing stops)
+cd clinical-trial-termination-prediction/Data-Pipeline
+gcloud auth login && export PROJECT=YOUR_PROJECT_ID
+./composer/deploy.sh setup       # once: APIs, bucket, service accounts, roles
+./composer/deploy.sh image && ./composer/deploy.sh gpu-image
+./composer/deploy.sh up          # create Composer (about 25 min)
+./composer/deploy.sh trigger     # one run
+./composer/deploy.sh down        # delete Composer (billing stops)
 ```
 
-Without AACT credentials the pipeline runs on a seeded test snapshot in the AACT format, so every step can be exercised. Details: [Data-Pipeline/composer/README.md](Data-Pipeline/composer/README.md).
+Details, and our own deployment with screenshots:
+[docs/cloud_deployment.md](docs/cloud_deployment.md). On our project
+(`ctt-mlops-project`), CI builds the images on every push, so a session is
+only `up`, `trigger` and `down`.
 
 ## Data versioning and reproducibility
 
 - `Data-Pipeline/dvc.yaml` declares each stage's code, inputs, parameters and outputs. `dvc.lock` stores the md5 of every output, so each run's `dvc.lock` is one exact data version; the data itself is in the DVC remote `gs://ctt-mlops-project-data/dvc-store`.
 - Every run writes its `dvc.lock` and a version record to `gs://ctt-mlops-project-data/data-pipeline/state/versions/<snapshot>/`, so the exact data of any run can be pulled again.
 - The test snapshot is seeded, so the same parameters give the same data and the same `dvc.lock` hashes.
-- Rebuilding from scratch: clone, push (CI builds the images), `./composer/deploy.sh setup` and `up`, trigger.
+- Every run's `dvc.lock` and version record also go to the state folder of a local run (`Data-Pipeline/local/output/state/versions/`), and its data to the local DVC remote.
+- Rebuilding from scratch: on a machine with Docker, `./local/pipeline.sh up` and `trigger`. On Google Cloud, `./composer/deploy.sh setup`, `image`, `gpu-image`, `up` and `trigger` in any project.
 
 ## Tests
 
@@ -120,7 +136,7 @@ Each module below is called by one pipeline stage (`Data-Pipeline/scripts/`), lo
 
 `src/ingestion/fetch_aact.py` (stage `acquire`) saves one AACT snapshot, keeping only the 12 tables the project uses, and writes a `manifest.json` (source, snapshot date, file sizes); DVC then stores it in the bucket. Both sources need a free [AACT account](https://aact.ctti-clinicaltrials.org/):
 
-- `SOURCE=db`: the AACT cloud database, with `AACT_USER` and `AACT_PASSWORD` from the VM's `.env` or Composer's secret.
+- `SOURCE=db`: the AACT cloud database, with `AACT_USER` and `AACT_PASSWORD` from `Data-Pipeline/.env` (locally) or Composer's secret (made from that file).
 - `SOURCE=zip ZIP=gs://...`: the monthly flat-file export, from the bucket or its URL.
 
 Each table is checked for an `nct_id` column and at least one row. Downloads retry up to 3 times and never leave a partial file.
