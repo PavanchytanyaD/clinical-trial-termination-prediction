@@ -23,10 +23,25 @@ UI="http://localhost:${CTT_UI_PORT:-8080}"
 compose() { docker compose -f "${HERE}/docker-compose.yaml" "$@"; }
 af() { compose exec -T scheduler airflow "$@"; }
 
+# Wait until the scheduler has parsed both DAGs (right after up, it has not)
+wait_for_dags() {
+  local i
+  for i in $(seq 1 30); do
+    if [ "$(af dags list -o plain 2>/dev/null \
+            | grep -cE '^(ctt_data_pipeline|ctt_freeze_baseline) ')" = 2 ]; then
+      return 0
+    fi
+    sleep 10
+  done
+  echo "the DAGs did not load; see: docker compose -f ${HERE}/docker-compose.yaml logs scheduler" >&2
+  return 1
+}
+
 # Trigger a DAG and wait until the run ends; prints each task's state and
 # where the run's files are (\$3, with RUN for the run id)
 run_dag() {
   local dag="$1" conf="$2" where="$3" run_id state
+  wait_for_dags
   af dags unpause "${dag}" >/dev/null
   run_id="local__$(date -u +%Y%m%dT%H%M%S)"
   af dags trigger "${dag}" -r "${run_id}" -c "${conf}" >/dev/null
@@ -50,6 +65,7 @@ case "${1:-}" in
   up)
     mkdir -p "${HERE}/output"
     compose up -d --build --wait
+    wait_for_dags
     echo "Airflow is up: ${UI} (admin / admin)"
     ;;
   trigger)
