@@ -13,7 +13,7 @@ Bias is checked twice in every pipeline run:
 Source: full AACT pull, run with `input.limit: null`.
 Outputs (each run, in `Data-Pipeline/reports/bias/`): `data_summary.json`, `data_slices.csv`,
 `mitigation/mitigation_summary.json`, `mitigation/mitigation_before_after.csv`. The full-AACT run
-these sections quote is copied to [bias_data_full_aact/](bias_data_full_aact/).
+these sections quote is copied to [bias_report_evidence/data_full_aact/](bias_report_evidence/data_full_aact/).
 
 ## 1. Data and slices
 
@@ -195,7 +195,7 @@ still gives them away (most likely a missing-value pattern). This is not bias bu
 warning: the modeling team should find that column before training the real model.
 
 **Outputs** (each run, in `Data-Pipeline/reports/bias_model/`; the 2019 run is copied to
-[`docs/bias_model_2019/`](bias_model_2019/)): `bias_model.md` (this report's tables),
+[`docs/bias_report_evidence/model_2019/`](bias_report_evidence/model_2019/)): `bias_model.md` (this report's tables),
 `model_slices.csv` (every group, every model), `model_gaps.csv`, `summary.json`.
 Settings: `params.yaml` section `bias_model` (test share, gap limit, minimum stopped trials,
 threshold slice) and `configs/bias_config.yaml` (slices, threshold 0.5, minimum group size 100).
