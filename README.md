@@ -463,10 +463,10 @@ We tested it end to end: a local run on a snapshot that is too small (50 trials,
 |---|---|
 | Run the pipeline on your machine | Git, Bash, Docker with Compose v2 (about 4 GB of memory for Docker). The image installs the Python dependencies (`Data-Pipeline/requirements.txt`) and the BioBERT weights. |
 | Run it on Google Cloud | Git, Bash, the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), a project with billing. Cloud Build builds the images from `Data-Pipeline/docker/`. |
-| Run the tests | Python 3.11+: `pip install -r requirements.txt -r requirements-bias.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt` |
+| Run the tests | Python 3.11+: `pip install -r requirements.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt` |
 | Real AACT data or email alerts (optional) | `cp Data-Pipeline/.env.example Data-Pipeline/.env`, then fill it in with [docs/SETUP.md](docs/SETUP.md) |
 
-All dependencies are pinned: `requirements.txt` (shared code), `requirements-bias.txt` (bias code), `Data-Pipeline/requirements.txt` (pipeline stages), `Data-Pipeline/docker/requirements-gpu.txt` (BioBERT GPU image), `requirements-dev.txt` (tests and style).
+All dependencies are pinned: `requirements.txt` (shared code in `src/`), `Data-Pipeline/requirements.txt` (pipeline stages), `Data-Pipeline/docker/requirements-gpu.txt` (BioBERT GPU image), `requirements-dev.txt` (tests and style).
 
 ---
 
@@ -488,7 +488,7 @@ All dependencies are pinned: `requirements.txt` (shared code), `requirements-bia
 ## Tests and code quality
 
 ```bash
-pip install -r requirements.txt -r requirements-bias.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt
+pip install -r requirements.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt
 pytest                          # src/ code
 cd Data-Pipeline && pytest      # pipeline stages, DAG and DVC runner (DAG tests need Airflow)
 ```
@@ -503,30 +503,41 @@ cd Data-Pipeline && pytest      # pipeline stages, DAG and DVC runner (DAG tests
 
 ```
 clinical-trial-termination-prediction/
-├── .github/workflows/ci.yml   CI/CD: tests on every push, then images → Artifact Registry
-├── Data-Pipeline/             the data pipeline (folder layout from the guidelines)
-│   ├── dags/                  Airflow DAGs
-│   ├── scripts/               one module per stage + tracking, alerts, DVC stage runner
-│   ├── tests/                 tests for the stages, DAG and DVC runner
-│   ├── data/  logs/           written by each run (data versioned by DVC, not Git)
-│   ├── schema/baseline/       how the validation baseline is frozen
-│   ├── docs/                  pipeline optimization (Gantt charts)
-│   ├── local/                 way 1: Airflow in Docker (pipeline.sh)
-│   ├── composer/              way 2: Cloud Composer (deploy.sh)
-│   ├── docker/                pipeline image, BioBERT GPU image
-│   ├── dvc.yaml  params.yaml  DVC stages and parameters
-│   ├── dvc.lock               the current data version
-│   └── README.md
-├── src/                       shared code the stages call
-│   ├── ingestion/             AACT download / database export, table checks
-│   ├── features/              text cleaning, structured features, BioBERT
-│   ├── bias/                  slicing, bias reports, mitigation, per-group metrics
-│   ├── error_handling.py      typed pipeline errors
-│   └── logging_utils.py       logging for src scripts
-├── configs/bias_config.yaml   bias settings
-├── tests/                     tests for src/
-├── docs/                      setup guide, bias report, screenshots, scoping document
-└── requirements*.txt          pinned dependencies
+├── .github/workflows/ci.yml       CI/CD: tests on every push, then images → Artifact Registry
+├── Data-Pipeline/                 the data pipeline (folder layout from the guidelines)
+│   ├── dags/                      the Airflow DAG
+│   ├── scripts/                   one module per stage + tracking, alerts, DVC stage runner
+│   ├── tests/                     tests for the stages, DAG and DVC runner
+│   ├── data/  reports/  logs/     written by each run (data versioned by DVC, not Git)
+│   ├── schema/baseline/           how the validation baseline is frozen
+│   ├── docs/                      pipeline optimization (Gantt charts)
+│   ├── local/                     way 1: Airflow in Docker
+│   │   ├── pipeline.sh            up / trigger / schedule / down
+│   │   ├── docker-compose.yaml
+│   │   └── Dockerfile             local image: Airflow + pipeline + BioBERT on CPU
+│   ├── composer/deploy.sh         way 2: Google Cloud (Composer, GCS, Vertex AI)
+│   ├── docker/                    cloud images, built by Cloud Build
+│   │   ├── Dockerfile             pipeline image (every task pod on Composer)
+│   │   ├── Dockerfile.gpu         BioBERT image (Vertex AI GPU job)
+│   │   └── requirements-gpu.txt   packages for Dockerfile.gpu
+│   ├── requirements.txt           packages for the pipeline images
+│   ├── dvc.yaml  params.yaml      DVC stages and parameters
+│   ├── dvc.lock                   the current data version
+│   ├── .env.example               template for AACT login and email alerts
+│   └── README.md                  pipeline details
+├── src/                           shared code the stages call
+│   ├── ingestion/                 AACT download / database export, table checks
+│   ├── features/                  text cleaning, structured features, BioBERT
+│   ├── bias/                      slicing, bias reports, mitigation, per-group metrics
+│   ├── error_handling.py          typed pipeline errors
+│   └── logging_utils.py           logging for src scripts
+├── tests/                         tests for src/
+├── configs/bias_config.yaml       bias settings (read by the bias stages)
+├── docs/                          setup guide, bias report and its results, screenshots
+├── requirements.txt               packages for src/ and its tests
+├── requirements-dev.txt           flake8, black (code style)
+├── .flake8  pyproject.toml        code style settings (flake8 runs in CI)
+└── CONTRIBUTING.md                logging, error handling and code style rules
 ```
 
 ---
