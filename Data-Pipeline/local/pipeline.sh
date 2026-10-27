@@ -12,7 +12,10 @@
 #             SOURCE=sample|zip|db ZIP=... SAMPLE_TRIALS=...)
 #   freeze    make the latest run's schema and statistics the validation
 #             baseline (REASON="...")
-#   status    the runs and the state of each task of the latest run
+#   schedule  show how often the pipeline runs, or change it, live:
+#             schedule "@weekly" (or a cron such as "0 6 * * 1", "none" for
+#             manual runs only, "default" for monthly)
+#   status    the runs of the pipeline
 #   down      stop Airflow (output/ and Airflow's history are kept)
 #   clean     stop Airflow and delete its history and local/output/
 set -euo pipefail
@@ -75,6 +78,14 @@ case "${1:-}" in
   freeze)
     run_dag ctt_freeze_baseline "{\"reason\": \"${REASON:-trusted snapshot}\"}" \
       "baseline: ${HERE}/output/state/baseline/"
+    ;;
+  schedule)
+    case "${2:-}" in
+      "") af variables get ctt_schedule 2>/dev/null \
+            || echo "default: monthly, the 5th at 06:00 UTC (0 6 5 * *)" ;;
+      default) af variables delete ctt_schedule ;;
+      *) af variables set ctt_schedule "$2" ;;
+    esac
     ;;
   status)
     af dags list-runs -d ctt_data_pipeline -o table

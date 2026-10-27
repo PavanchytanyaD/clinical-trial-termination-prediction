@@ -2,7 +2,8 @@
 
                +--> preprocess --+--> schema_stats --> validate --+
                |                 +--> anomalies -------------------+
-    acquire ---+--> bias ------------------------------------------+--> publish
+               |                 +--> bias_model ------------------+
+    acquire ---+--> bias -------------^                            +--> publish
                +--> text --> embeddings ---------------------------+
 
 Each task runs one DVC stage (scripts/run_stage.py), so DVC versions every
@@ -10,6 +11,9 @@ output and skips stages whose inputs did not change; Airflow schedules the
 run, orders the steps, retries failed steps and emails on failure.
 `embeddings` computes the BioBERT text embeddings in a Vertex AI GPU job and
 waits for it; DVC skips it when the text did not change.
+`bias` slices the data and reweights small groups; `bias_model` trains a
+baseline model with and without those weights and compares it across the
+groups (Fairlearn).
 Independent branches run in parallel (bias needs only the raw snapshot;
 schema_stats and anomalies both need only the features), which shortens the
 run; see docs/pipeline_optimization.md.
@@ -48,6 +52,14 @@ composer/deploy.sh, or of the local containers, set in local/):
   CTT_ZIP           default acquire.zip, for source zip
   CTT_SMTP_SECRET   Kubernetes secret with SMTP_* / ALERT_* / AACT_* keys
   CTT_NAMESPACE     pod namespace (Composer 3: composer-user-workloads)
+
+How often it runs: the Airflow Variable ctt_schedule (a cron expression
+such as "0 6 * * 1", a preset such as "@weekly" or "@daily", or "none" for
+manual runs only). It can be changed at any time, in the UI (Admin >
+Variables) or with deploy.sh / pipeline.sh schedule, and the scheduler
+picks it up within about a minute, with no redeploy. Without it, the
+environment variable CTT_SCHEDULE is used, and without that, the default:
+monthly, on the 5th at 06:00 UTC (after AACT's monthly export).
 
 Trigger with a config to pick the snapshot or source for one run:
     {"snapshot": "20261001", "source": "zip", "zip": "gs://.../export.zip"}
@@ -92,6 +104,22 @@ ZIP = ('{{ dag_run.conf.get("zip") or '
 # empty = keep params.yaml's value
 SAMPLE_TRIALS = '{{ dag_run.conf.get("sample_trials") or "" }}'
 REASON = '{{ dag_run.conf.get("reason") or "trusted snapshot" }}'
+
+DEFAULT_SCHEDULE = "0 6 5 * *"   # monthly: the 5th at 06:00 UTC
+
+
+def schedule():
+    """The run schedule: Airflow Variable ctt_schedule, then CTT_SCHEDULE,
+    then monthly. "none" (or "manual") means triggered runs only."""
+    value = None
+    try:
+        from airflow.models import Variable
+        value = Variable.get("ctt_schedule", default_var=None)
+    except Exception:  # no metadata database (e.g. a syntax check)
+        log.warning("could not read Variable ctt_schedule; using defaults")
+    value = (value or os.environ.get("CTT_SCHEDULE") or DEFAULT_SCHEDULE)
+    value = value.strip()
+    return None if value.lower() in ("none", "manual") else value
 
 
 def log_failure(context):
@@ -180,8 +208,8 @@ with DAG(
     dag_id="ctt_data_pipeline",
     description="AACT snapshot -> features, bias report -> statistics, "
                 "anomalies, validation -> DVC data version",
-    # AACT publishes a monthly export; run on the 5th at 06:00 UTC
-    schedule="0 6 5 * *",
+    # default monthly, after AACT's monthly export; see schedule()
+    schedule=schedule(),
     start_date=datetime(2026, 10, 1),
     catchup=False,
     # runs must not overlap: a run's stages share dvc.lock and params.yaml
@@ -197,6 +225,7 @@ with DAG(
                                "acquire.sample_trials": SAMPLE_TRIALS})
     preprocess = step("preprocess")
     bias = step("bias")
+    bias_model = step("bias_model", timeout=timedelta(minutes=45))
     text = step("text")
     embeddings = step("embeddings", timeout=timedelta(hours=10))
     schema_stats = step("schema_stats")
@@ -207,10 +236,11 @@ with DAG(
     publish = step("publish", timeout=timedelta(minutes=30))
 
     acquire >> [preprocess, bias, text]
-    preprocess >> [schema_stats, anomalies]
+    preprocess >> [schema_stats, anomalies, bias_model]
+    bias >> bias_model
     schema_stats >> validate
     text >> embeddings
-    [validate, anomalies, bias, embeddings] >> publish
+    [validate, anomalies, bias_model, embeddings] >> publish
 
 
 with DAG(

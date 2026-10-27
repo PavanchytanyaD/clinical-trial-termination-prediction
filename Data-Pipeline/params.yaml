@@ -28,6 +28,13 @@ bias:
   # picks the mitigation: reweight or resample
   mitigation_method: reweight
 
+bias_model:
+  # baseline logistic regression, evaluated per subgroup (scripts/bias_model.py)
+  test_share: 0.2             # most recently registered 20% = test set
+  max_gap: 0.10               # flag a best-minus-worst group gap above this
+  regularization: 1.0         # logistic regression C
+  seed: 42
+
 anomalies:
   fail_on: critical           # stop the pipeline on: critical | warning | never
   alert_on: warning           # email on: critical | warning | never

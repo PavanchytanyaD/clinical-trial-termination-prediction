@@ -45,13 +45,16 @@ def test_bad_overrides_are_rejected(bad, tmp_path):
 
 def test_stage_graph_matches_dvc_yaml():
     assert list(run_stage.stages()) == ["acquire", "preprocess", "bias",
-                                        "schema_stats", "anomalies",
-                                        "validate", "text", "embeddings"]
+                                        "bias_model", "schema_stats",
+                                        "anomalies", "validate", "text",
+                                        "embeddings"]
     produced = run_stage.produced_by()
     assert produced["data/raw/aact_snapshot"] == "acquire"
     assert produced["data/processed/structured_features.csv"] == "preprocess"
     # metrics with cache: false are not pulled from the remote
     assert "reports/validation/summary.json" not in produced
+    assert {produced.get(d) for d in run_stage.stage_deps("bias_model")} \
+        >= {"preprocess", "bias"}
     upstream = {produced.get(d) for d in run_stage.stage_deps("validate")}
     assert upstream >= {"preprocess", "schema_stats"}
     assert produced["data/processed/embeddings"] == "embeddings"
@@ -286,7 +289,7 @@ def composer_env(monkeypatch):
     defaults."""
     for name in ["RUNNER", "STATE_URI", "DVC_REMOTE", "GCP_PROJECT",
                  "REGION", "BUCKET", "GPU_IMAGE", "SERVICE_ACCOUNT",
-                 "EMBEDDINGS"]:
+                 "EMBEDDINGS", "SCHEDULE"]:
         monkeypatch.delenv(f"CTT_{name}", raising=False)
 
 
@@ -308,15 +311,30 @@ def test_dag_structure():
         "bias": ["acquire"],
         "text": ["acquire"],
         "embeddings": ["text"],
+        "bias_model": ["bias", "preprocess"],
         "schema_stats": ["preprocess"],
         "anomalies": ["preprocess"],
         "validate": ["schema_stats"],
-        "publish": ["anomalies", "bias", "embeddings", "validate"],
+        "publish": ["anomalies", "bias_model", "embeddings", "validate"],
     }
     for t in dag.tasks:
         assert type(t).__name__ == "KubernetesPodOperator"
         assert t.retries == 2
     assert dag.max_active_runs == 1 and dag.catchup is False
+
+
+def test_schedule_defaults_to_monthly_and_can_be_changed(monkeypatch):
+    assert load_dag().schedule_interval == "0 6 5 * *"
+    monkeypatch.setenv("CTT_SCHEDULE", "@weekly")
+    assert load_dag().schedule_interval == "@weekly"
+    from airflow.models import Variable
+    Variable.set("ctt_schedule", "0 6 * * 1")   # the Variable wins
+    try:
+        assert load_dag().schedule_interval == "0 6 * * 1"
+        Variable.set("ctt_schedule", "none")
+        assert load_dag().schedule_interval is None
+    finally:
+        Variable.delete("ctt_schedule")
 
 
 def test_freeze_dag_runs_one_pod():
@@ -352,7 +370,7 @@ def test_local_runner_runs_each_stage_in_bash(monkeypatch):
     monkeypatch.setenv("CTT_STATE_URI", "/opt/ctt-output/state")
     monkeypatch.setenv("CTT_EMBEDDINGS", "local")
     dag = load_dag()
-    assert len(dag.tasks) == 9
+    assert len(dag.tasks) == 10
     for t in dag.tasks:
         assert type(t).__name__ == "BashOperator"
         assert "local/run_task.sh" in t.bash_command

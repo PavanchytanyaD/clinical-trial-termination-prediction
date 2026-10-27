@@ -45,6 +45,7 @@ VALIDATION_SUMMARY = VALIDATION_DIR / "summary.json"
 VALIDATION_MD = VALIDATION_DIR / "validation.md"
 
 BIAS_DIR = ROOT / "reports" / "bias"
+BIAS_MODEL_DIR = ROOT / "reports" / "bias_model"
 ANOMALY_DIR = ROOT / "reports" / "anomalies"
 ANOMALY_JSON = ANOMALY_DIR / "anomalies.json"
 ANOMALY_MD = ANOMALY_DIR / "anomalies.md"

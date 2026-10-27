@@ -25,6 +25,9 @@
 #              SAMPLE_TRIALS=...)
 #   freeze     make the latest run's schema and statistics the validation
 #              baseline (REASON="...")
+#   schedule   show how often the pipeline runs, or change it, live:
+#              SCHEDULE="@weekly" (or a cron such as "0 6 * * 1", "none" for
+#              manual runs only, "default" for monthly)
 #   ui         print the Airflow web UI address
 #   lock       copy the latest run's dvc.lock into Data-Pipeline/dvc.lock, to
 #              commit it: Git then keeps the history of the data versions
@@ -239,6 +242,16 @@ step() {
     freeze)
       trigger_dag ctt_freeze_baseline \
         "{\"reason\": \"${REASON:-trusted snapshot}\"}"
+      ;;
+    schedule)
+      local var=(gc composer environments run "${ENV_NAME}" --location
+                 "${REGION}" variables --)
+      case "${SCHEDULE:-}" in
+        "") "${var[@]}" get ctt_schedule 2>/dev/null \
+              || echo "default: monthly, the 5th at 06:00 UTC (0 6 5 * *)" ;;
+        default) "${var[@]}" delete ctt_schedule ;;
+        *) "${var[@]}" set ctt_schedule "${SCHEDULE}" ;;
+      esac
       ;;
     lock)
       gc storage cp "${STATE_URI}/dvc.lock" "${HERE}/dvc.lock"
