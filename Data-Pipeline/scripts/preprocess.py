@@ -140,6 +140,12 @@ def main():
         out, meta, builder = build(mode)
         check_contract(out)
         meta["builder"] = builder
+        # which snapshot this is, for the later steps, which do not have the
+        # raw snapshot (each task pulls only its own inputs)
+        manifest = RAW_DIR / "manifest.json"
+        if manifest.exists():
+            m = json.loads(manifest.read_text())
+            meta.update(snapshot=m.get("snapshot"), source=m.get("source"))
         FEATURES_CSV.parent.mkdir(parents=True, exist_ok=True)
         out.to_csv(FEATURES_CSV, index=False, float_format="%.6g")
         FEATURES_META.write_text(json.dumps(meta, indent=2))

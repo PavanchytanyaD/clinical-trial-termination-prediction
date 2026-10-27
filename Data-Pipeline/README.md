@@ -361,10 +361,11 @@ records and alert emails say what kind of failure happened.
 pip install -r requirements.txt && pytest
 ```
 
-77 tests cover the test snapshot and features, statistics values, the
+78 tests cover the test snapshot and features, statistics values, the
 inferred schema, every critical and warning check (a dropped column,
 duplicate or malformed ids, an invalid label, out-of-range values), drift
-detection, every anomaly check, the bias stage, the text stage, the Vertex AI
+detection, the snapshot date in the statistics, every anomaly check, the
+bias stage, the text stage, the Vertex AI
 job (spec, CPU-only spec, polling, cancel on stop, the round trip through the
 bucket, settings from the environment), the local BioBERT backend, the fail
 and alert policies, run records, email alerts (with a fake SMTP server),

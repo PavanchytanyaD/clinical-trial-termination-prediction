@@ -160,13 +160,19 @@ def column_statistics(name, series, real=None, outlier_k=OUTLIER_K):
 
 
 def snapshot_info():
+    """Snapshot, source and feature builder, from the features' meta.json
+    (preprocess copies them from the raw snapshot's manifest, which this
+    step does not have)."""
     info = {}
     manifest = RAW_DIR / "manifest.json"
     if manifest.exists():
         m = json.loads(manifest.read_text())
         info = {"snapshot": m.get("snapshot"), "source": m.get("source")}
     if FEATURES_META.exists():
-        info["builder"] = json.loads(FEATURES_META.read_text()).get("builder")
+        meta = json.loads(FEATURES_META.read_text())
+        info.update({k: meta[k] for k in ("snapshot", "source")
+                     if meta.get(k) is not None})
+        info["builder"] = meta.get("builder")
     return info
 
 

@@ -64,6 +64,7 @@ stages:
     cmd: python -m scripts.schema_stats
     deps:
       - data/processed/structured_features.csv
+      - data/processed/structured_features.meta.json
       - scripts/schema_stats.py
     params:
       - schema
