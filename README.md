@@ -74,6 +74,17 @@ clinical-trial-termination-prediction/
 \- CONTRIBUTING.md           logging, error handling, code style, branches
 ```
 
+## Environment setup
+
+| To | You need |
+|---|---|
+| Run the pipeline on your machine | Git, Bash and Docker with Compose v2 (Docker Desktop, or Docker Engine on Linux), with about 4 GB of memory for Docker. The image installs every Python dependency (`Data-Pipeline/requirements.txt`) and the BioBERT weights itself. |
+| Run it on Google Cloud | Git, Bash, the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and a project with billing enabled. Cloud Build builds the images from `Data-Pipeline/docker/`. |
+| Run the tests | Python 3.11 or later: `pip install -r requirements.txt -r requirements-bias.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt` |
+| Use real AACT data or email alerts (optional) | `cp Data-Pipeline/.env.example Data-Pipeline/.env`, then fill it in with [docs/SETUP.md](docs/SETUP.md). Without it, the pipeline runs on a seeded test snapshot in the AACT format. |
+
+Dependencies are pinned: `requirements.txt` (shared code), `requirements-bias.txt` (bias code), `Data-Pipeline/requirements.txt` (pipeline stages), `Data-Pipeline/docker/requirements-gpu.txt` (BioBERT GPU image) and `requirements-dev.txt` (tests and style check).
+
 ## Run the pipeline
 
 Pick one of the two ways. Both run the same DAG on the seeded test snapshot
@@ -113,6 +124,8 @@ only `up`, `trigger` and `down`.
 ## Data versioning and reproducibility
 
 - `Data-Pipeline/dvc.yaml` declares each stage's code, inputs, parameters and outputs. `dvc.lock` stores the md5 of every output, so each run's `dvc.lock` is one exact data version; the data itself is in the DVC remote `gs://ctt-mlops-project-data/dvc-store`.
+- There are no separate `.dvc` files: every dataset (the raw snapshot, the features, the text, the embeddings, the reports) is the output of a stage in `dvc.yaml`, and DVC tracks stage outputs in `dvc.lock` instead of `.dvc` files.
+- **Data history in Git:** `Data-Pipeline/dvc.lock` is committed. After a cloud run, `./composer/deploy.sh lock` copies that run's `dvc.lock` into the repository, to commit with the code that produced it. The committed one is the Composer run of 2026-10-26 (all nine stages, including the embeddings). `git log -p Data-Pipeline/dvc.lock` shows how the data changed. To restore a version: `git checkout <commit> -- Data-Pipeline/dvc.lock`, then `dvc pull` in `Data-Pipeline` (needs read access to the bucket).
 - Every run writes its `dvc.lock` and a version record to `gs://ctt-mlops-project-data/data-pipeline/state/versions/<snapshot>/`, so the exact data of any run can be pulled again.
 - The test snapshot is seeded, so the same parameters give the same data and the same `dvc.lock` hashes.
 - Every run's `dvc.lock` and version record also go to the state folder of a local run (`Data-Pipeline/local/output/state/versions/`), and its data to the local DVC remote.
@@ -121,7 +134,7 @@ only `up`, `trigger` and `down`.
 ## Tests
 
 ```bash
-pip install -r requirements.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt
+pip install -r requirements.txt -r requirements-bias.txt -r Data-Pipeline/requirements.txt -r requirements-dev.txt
 pytest                          # src/ code
 cd Data-Pipeline && pytest      # pipeline stages, DAG and DVC runner (DAG tests need Airflow)
 ```

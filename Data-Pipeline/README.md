@@ -230,6 +230,16 @@ replaces it for one run without touching `.dvc/config`. `deploy.sh` sets it
 to `gs://<your bucket>/dvc-store` in another project, and the local Docker
 Airflow sets it to `local/output/dvc-store`.
 
+There are no separate `.dvc` files: every dataset is the output of a stage
+in `dvc.yaml`, and DVC records stage outputs in `dvc.lock`, which plays the
+role of `.dvc` files. `dvc.lock` is committed, so Git keeps the history of
+the data next to the code. After a cloud run, `./composer/deploy.sh lock`
+copies that run's `dvc.lock` here to commit. The committed one is from the
+Composer run of 2026-10-26, and `dvc pull` restores all 41 of its files
+(including the embeddings) from the bucket. `git log -p dvc.lock` shows how
+the data changed; `git checkout <commit> -- dvc.lock` followed by `dvc pull`
+brings back an older version.
+
 Every run writes its data version to the state folder:
 `state/versions/<snapshot>/<run_id>.json` (output hashes and the validation
 summary) and `state/versions/<snapshot>/dvc.lock`. Restoring a version is a

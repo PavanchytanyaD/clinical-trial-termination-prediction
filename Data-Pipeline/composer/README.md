@@ -42,6 +42,7 @@ export ALERT_EMAILS=<a@x.com,b@y.com>   # optional: failure emails
                                # settings, AACT/SMTP secret, upload the DAGs
 ./composer/deploy.sh trigger   # SNAPSHOT=20261101 SOURCE=db ... to choose
 ./composer/deploy.sh ui        # the Airflow web UI address
+./composer/deploy.sh lock      # copy the run's dvc.lock here, then commit it
 ./composer/deploy.sh down      # snapshot Airflow's history, then delete
 ```
 

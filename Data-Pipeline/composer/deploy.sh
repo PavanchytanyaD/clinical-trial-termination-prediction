@@ -26,6 +26,8 @@
 #   freeze     make the latest run's schema and statistics the validation
 #              baseline (REASON="...")
 #   ui         print the Airflow web UI address
+#   lock       copy the latest run's dvc.lock into Data-Pipeline/dvc.lock, to
+#              commit it: Git then keeps the history of the data versions
 #   down       save a snapshot, then delete the environment (billing stops)
 #
 # Single steps of `up`: env, config, secret, dag
@@ -237,6 +239,10 @@ step() {
     freeze)
       trigger_dag ctt_freeze_baseline \
         "{\"reason\": \"${REASON:-trusted snapshot}\"}"
+      ;;
+    lock)
+      gc storage cp "${STATE_URI}/dvc.lock" "${HERE}/dvc.lock"
+      echo "commit Data-Pipeline/dvc.lock to record this data version in Git"
       ;;
     ui)
       gc composer environments describe "${ENV_NAME}" --location "${REGION}" \
