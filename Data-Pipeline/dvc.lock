@@ -28,22 +28,51 @@ stages:
         acquire:
           source: sample
           zip: ''
-          snapshot: '20261001'
+          snapshot: '20261026'
           sample_trials: 500
           seed: 42
     outs:
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      md5: c589530bc255401ae5c905ea48c3fc18.dir
       size: 678731
       nfiles: 13
+  text:
+    cmd: python -m scripts.text
+    deps:
+    - path: ../src/features/build_text_sample.py
+      hash: md5
+      md5: 6287f9461b0532c00a94c8c83f2493ea
+      size: 8301
+    - path: ../src/features/text_cleaning.py
+      hash: md5
+      md5: c02b16e4f490fb0130d9952c38b98f24
+      size: 3655
+    - path: data/raw/aact_snapshot
+      hash: md5
+      md5: c589530bc255401ae5c905ea48c3fc18.dir
+      size: 678731
+      nfiles: 13
+    - path: scripts/text.py
+      hash: md5
+      md5: f3b423b2f8cf42a7f717b1da915b55a3
+      size: 1554
+    outs:
+    - path: data/processed/text_all.jsonl
+      hash: md5
+      md5: db07594d30f1abd3198118fd95bac1ee
+      size: 357970
+    - path: data/processed/text_all.meta.json
+      hash: md5
+      md5: f8ec0234cdb085921c5d44f41ab5949a
+      size: 492
   preprocess:
     cmd: python -m scripts.preprocess
     deps:
     - path: ../src/features/build_text_sample.py
       hash: md5
-      md5: ab02064eb384828466fc4e2da1cf64a4
-      size: 8241
+      md5: 6287f9461b0532c00a94c8c83f2493ea
+      size: 8301
     - path: ../src/features/structured_features.py
       hash: md5
       md5: 5f68d72469e1bcdaab32491df0e97981
@@ -54,7 +83,7 @@ stages:
       size: 3655
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      md5: c589530bc255401ae5c905ea48c3fc18.dir
       size: 678731
       nfiles: 13
     - path: scripts/preprocess.py
@@ -72,86 +101,8 @@ stages:
       size: 186622
     - path: data/processed/structured_features.meta.json
       hash: md5
-      md5: b4f1e0e2544b23d2d6140913adb9ce1b
-      size: 7013
-  schema_stats:
-    cmd: python -m scripts.schema_stats
-    deps:
-    - path: data/processed/structured_features.csv
-      hash: md5
-      md5: 240cc02e3ecb75a52246bd53e6825de1
-      size: 186622
-    - path: scripts/schema_stats.py
-      hash: md5
-      md5: 3c95ad1bac9b7ed993314fdab1ecd744
-      size: 14345
-    params:
-      params.yaml:
-        schema:
-          min_rows: 100
-          range_slack: 0.5
-          mostly: 0.99
-          max_missing_increase: 0.05
-          categorical_max_distinct: 50
-    outs:
-    - path: reports/statistics/statistics.json
-      hash: md5
-      md5: 1e8bfd8eaf823a931ef7cbd0a8275f29
-      size: 48072
-    - path: reports/statistics/statistics.md
-      hash: md5
-      md5: 85e224222f06f5c497c15a94710cd78c
-      size: 10818
-    - path: schema/generated/expectation_suite.json
-      hash: md5
-      md5: 6c5c1fe7c2115b6dbcd6d66a236d7072
-      size: 152435
-  validate:
-    cmd: python -m scripts.validate
-    deps:
-    - path: data/processed/structured_features.csv
-      hash: md5
-      md5: 240cc02e3ecb75a52246bd53e6825de1
-      size: 186622
-    - path: reports/statistics/statistics.json
-      hash: md5
-      md5: 1e8bfd8eaf823a931ef7cbd0a8275f29
-      size: 48072
-    - path: schema/baseline
-      hash: md5
-      md5: c8baf21055ed1231a003235988f72377.dir
-      size: 648
-      nfiles: 1
-    - path: schema/generated/expectation_suite.json
-      hash: md5
-      md5: 6c5c1fe7c2115b6dbcd6d66a236d7072
-      size: 152435
-    - path: scripts/validate.py
-      hash: md5
-      md5: ac89e61084f9a5f4467ce322d5184a7e
-      size: 12576
-    params:
-      params.yaml:
-        validate:
-          fail_on: critical
-          alert_on: warning
-          max_row_change: 0.5
-          max_stopped_rate_change: 0.05
-          max_missing_increase: 0.05
-          max_mean_shift_std: 0.5
-    outs:
-    - path: reports/validation/summary.json
-      hash: md5
-      md5: b95c855b2cf5a0d759f8e5a909ba5799
-      size: 257
-    - path: reports/validation/validation.json
-      hash: md5
-      md5: 69820bd95f5a84b10132ae8446e10fea
-      size: 216060
-    - path: reports/validation/validation.md
-      hash: md5
-      md5: 7193e0336dd11886cc549ca6941a157d
-      size: 192
+      md5: d2d8e8cc646364324f1a52a193f7f6e4
+      size: 6968
   bias:
     cmd: python -m scripts.bias
     deps:
@@ -177,8 +128,8 @@ stages:
       size: 4023
     - path: ../src/bias/run_bias_mitigation.py
       hash: md5
-      md5: 43722ddd4f951369e71ab9a0a59dc1b3
-      size: 6950
+      md5: 364e3fb401fb7cf4a10a995772ab0873
+      size: 6953
     - path: ../src/bias/slice_report.py
       hash: md5
       md5: 5ae8e75b71f8420399dbef840b8b21f6
@@ -189,7 +140,7 @@ stages:
       size: 3993
     - path: data/raw/aact_snapshot
       hash: md5
-      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
+      md5: c589530bc255401ae5c905ea48c3fc18.dir
       size: 678731
       nfiles: 13
     - path: scripts/bias.py
@@ -233,7 +184,7 @@ stages:
     outs:
     - path: reports/anomalies/anomalies.json
       hash: md5
-      md5: 187601704c15c78cccf5ed0dc70bf8ef
+      md5: 7f08caf0a2df1fa25a2649a895365bb4
       size: 187
     - path: reports/anomalies/anomalies.md
       hash: md5
@@ -241,34 +192,115 @@ stages:
       size: 94
     - path: reports/anomalies/summary.json
       hash: md5
-      md5: b49dd2c9a302d195cac7afdc61e87210
+      md5: 9ab329d9112e6621102ceda7cbb9d6bb
       size: 138
-  text:
-    cmd: python -m scripts.text
+  schema_stats:
+    cmd: python -m scripts.schema_stats
     deps:
-    - path: ../src/features/build_text_sample.py
+    - path: data/processed/structured_features.csv
       hash: md5
-      md5: ab02064eb384828466fc4e2da1cf64a4
-      size: 8241
-    - path: ../src/features/text_cleaning.py
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: scripts/schema_stats.py
       hash: md5
-      md5: c02b16e4f490fb0130d9952c38b98f24
-      size: 3655
-    - path: data/raw/aact_snapshot
-      hash: md5
-      md5: 6fe6c996a95a5748dc74c4f0e31a8652.dir
-      size: 678731
-      nfiles: 13
-    - path: scripts/text.py
-      hash: md5
-      md5: f3b423b2f8cf42a7f717b1da915b55a3
-      size: 1554
+      md5: 497c1654ba2c68398a47634e8e99b94a
+      size: 14397
+    params:
+      params.yaml:
+        schema:
+          min_rows: 100
+          range_slack: 0.5
+          mostly: 0.99
+          max_missing_increase: 0.05
+          categorical_max_distinct: 50
     outs:
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 047803ff0b7e09197371b8788e62babc
+      size: 47988
+    - path: reports/statistics/statistics.md
+      hash: md5
+      md5: c9d31a54fb8b1fdb275a13e221fbbd43
+      size: 10788
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 13c3060a0b70b6b1ae6d269a3e986d9f
+      size: 152429
+  validate:
+    cmd: python -m scripts.validate
+    deps:
+    - path: data/processed/structured_features.csv
+      hash: md5
+      md5: 240cc02e3ecb75a52246bd53e6825de1
+      size: 186622
+    - path: reports/statistics/statistics.json
+      hash: md5
+      md5: 047803ff0b7e09197371b8788e62babc
+      size: 47988
+    - path: schema/baseline
+      hash: md5
+      md5: 769961be5de7ed13118b6242d9455a4b.dir
+      size: 763
+      nfiles: 1
+    - path: schema/generated/expectation_suite.json
+      hash: md5
+      md5: 13c3060a0b70b6b1ae6d269a3e986d9f
+      size: 152429
+    - path: scripts/validate.py
+      hash: md5
+      md5: ac89e61084f9a5f4467ce322d5184a7e
+      size: 12576
+    params:
+      params.yaml:
+        validate:
+          fail_on: critical
+          alert_on: warning
+          max_row_change: 0.5
+          max_stopped_rate_change: 0.05
+          max_missing_increase: 0.05
+          max_mean_shift_std: 0.5
+    outs:
+    - path: reports/validation/summary.json
+      hash: md5
+      md5: d851ab5c39a71ae24dece5024f0bb46d
+      size: 251
+    - path: reports/validation/validation.json
+      hash: md5
+      md5: e5af03e6b9321e6963942d852df8ff8a
+      size: 216054
+    - path: reports/validation/validation.md
+      hash: md5
+      md5: 46a5e8d290e6cf2b1c674c9d040087b3
+      size: 188
+  embeddings:
+    cmd: python -m scripts.embeddings
+    deps:
+    - path: ../src/features/biobert_embeddings.py
+      hash: md5
+      md5: 825ee1a7cf7544df3b5f8606fe58ff6a
+      size: 4641
     - path: data/processed/text_all.jsonl
       hash: md5
       md5: db07594d30f1abd3198118fd95bac1ee
       size: 357970
-    - path: data/processed/text_all.meta.json
+    - path: scripts/embeddings.py
       hash: md5
-      md5: 59c3121cdb8a896e7361f8774f9e37c8
-      size: 537
+      md5: 1a1ab4c323eb2f88cf47d8ed90631ad2
+      size: 11072
+    params:
+      params.yaml:
+        embeddings:
+          max_trials: 0
+          model: dmis-lab/biobert-base-cased-v1.2
+          batch_size: 32
+          max_length: 512
+          stride: 64
+          machine_type: n1-standard-8
+          accelerator: NVIDIA_TESLA_T4
+          timeout_hours: 8
+    outs:
+    - path: data/processed/embeddings
+      hash: md5
+      md5: 7e028dee7641ae152bc8899465869ce1.dir
+      size: 4615479
+      nfiles: 8

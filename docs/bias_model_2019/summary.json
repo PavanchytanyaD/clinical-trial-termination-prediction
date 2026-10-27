@@ -1,0 +1,200 @@
+{
+  "n_train": 13402,
+  "n_test": 3351,
+  "n_features": 148,
+  "threshold": 0.5,
+  "min_group_size": 100,
+  "min_stopped": 10,
+  "max_gap": 0.1,
+  "threshold_slice": "region",
+  "group_thresholds": {
+    "NON_US_ONLY": 0.43138969283774764,
+    "US_ONLY": 0.5402534064557842,
+    "US_AND_NON_US": 0.632709581108944
+  },
+  "upweighted_trials": 82,
+  "overall": {
+    "baseline": {
+      "pr_auc": 0.4861517963741035,
+      "roc_auc": 0.7744900249229278,
+      "recall": 0.7806451612903226,
+      "precision": 0.2989499691167387,
+      "flagged_rate": 0.4831393613846613,
+      "stopped_rate": 0.1850193971948672
+    },
+    "reweighted": {
+      "pr_auc": 0.48594159992755875,
+      "roc_auc": 0.7745768417571255,
+      "recall": 0.7806451612903226,
+      "precision": 0.3002481389578164,
+      "flagged_rate": 0.4810504327066547,
+      "stopped_rate": 0.1850193971948672
+    },
+    "group_thresholds": {
+      "pr_auc": 0.45749393061346383,
+      "roc_auc": 0.7557009721123067,
+      "recall": 0.7935483870967742,
+      "precision": 0.28211009174311924,
+      "flagged_rate": 0.5204416592062071,
+      "stopped_rate": 0.1850193971948672
+    }
+  },
+  "flagged": [
+    {
+      "model": "baseline",
+      "slice": "phase",
+      "metric": "pr_auc",
+      "gap": 0.2122317045333318
+    },
+    {
+      "model": "baseline",
+      "slice": "phase",
+      "metric": "recall",
+      "gap": 0.22077922077922074
+    },
+    {
+      "model": "baseline",
+      "slice": "region",
+      "metric": "pr_auc",
+      "gap": 0.2500028190070086
+    },
+    {
+      "model": "baseline",
+      "slice": "region",
+      "metric": "recall",
+      "gap": 0.31853417899929526
+    },
+    {
+      "model": "baseline",
+      "slice": "therapeutic_area",
+      "metric": "pr_auc",
+      "gap": 0.34083451652833624
+    },
+    {
+      "model": "baseline",
+      "slice": "therapeutic_area",
+      "metric": "recall",
+      "gap": 0.46226415094339623
+    },
+    {
+      "model": "baseline",
+      "slice": "gender",
+      "metric": "pr_auc",
+      "gap": 0.10188453118559021
+    },
+    {
+      "model": "baseline",
+      "slice": "age_group",
+      "metric": "recall",
+      "gap": 0.1442846872753415
+    },
+    {
+      "model": "reweighted",
+      "slice": "phase",
+      "metric": "pr_auc",
+      "gap": 0.2206873950928379
+    },
+    {
+      "model": "reweighted",
+      "slice": "phase",
+      "metric": "recall",
+      "gap": 0.22077922077922074
+    },
+    {
+      "model": "reweighted",
+      "slice": "region",
+      "metric": "pr_auc",
+      "gap": 0.24864052020823296
+    },
+    {
+      "model": "reweighted",
+      "slice": "region",
+      "metric": "recall",
+      "gap": 0.32318534178999303
+    },
+    {
+      "model": "reweighted",
+      "slice": "therapeutic_area",
+      "metric": "pr_auc",
+      "gap": 0.34044810402254394
+    },
+    {
+      "model": "reweighted",
+      "slice": "therapeutic_area",
+      "metric": "recall",
+      "gap": 0.490041928721174
+    },
+    {
+      "model": "reweighted",
+      "slice": "gender",
+      "metric": "pr_auc",
+      "gap": 0.10217707116195174
+    },
+    {
+      "model": "reweighted",
+      "slice": "age_group",
+      "metric": "pr_auc",
+      "gap": 0.1032670300081251
+    },
+    {
+      "model": "reweighted",
+      "slice": "age_group",
+      "metric": "recall",
+      "gap": 0.1442846872753415
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "phase",
+      "metric": "pr_auc",
+      "gap": 0.16030792300556196
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "phase",
+      "metric": "recall",
+      "gap": 0.18181818181818177
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "region",
+      "metric": "pr_auc",
+      "gap": 0.2500028190070086
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "region",
+      "metric": "recall",
+      "gap": 0.1328671328671328
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "therapeutic_area",
+      "metric": "pr_auc",
+      "gap": 0.29940002326493176
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "therapeutic_area",
+      "metric": "recall",
+      "gap": 0.41666666666666663
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "gender",
+      "metric": "pr_auc",
+      "gap": 0.12412506823256625
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "gender",
+      "metric": "recall",
+      "gap": 0.12103053693547294
+    },
+    {
+      "model": "group_thresholds",
+      "slice": "age_group",
+      "metric": "recall",
+      "gap": 0.15923795830337883
+    }
+  ]
+}

@@ -7,6 +7,10 @@
 #
 # Google Cloud sign-in uses Workload Identity Federation: GitHub's OIDC token
 # is exchanged for the cicd-sa service account, so no key is stored here.
+# A fork deploys to its own project by setting the repository variables
+# GCP_PROJECT, WIF_PROVIDER and CICD_SA (Settings > Secrets and variables >
+# Actions > Variables); without them the build jobs run only in this
+# repository.
 name: ci
 
 on:
@@ -20,9 +24,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11"
-  GCP_PROJECT: ctt-mlops-project
-  WIF_PROVIDER: projects/431597074609/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-  CICD_SA: cicd-sa@ctt-mlops-project.iam.gserviceaccount.com
+  GCP_PROJECT: ${{ vars.GCP_PROJECT || 'ctt-mlops-project' }}
+  WIF_PROVIDER: ${{ vars.WIF_PROVIDER || 'projects/431597074609/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+  CICD_SA: ${{ vars.CICD_SA || 'cicd-sa@ctt-mlops-project.iam.gserviceaccount.com' }}
 
 jobs:
   lint:
@@ -86,7 +90,10 @@ jobs:
   build:
     name: build images
     needs: [lint, test-src, test-pipeline, test-dag]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pavan/integration')
+    if: >
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pavan/integration') &&
+      (github.repository == 'PavanchytanyaD/clinical-trial-termination-prediction' || vars.GCP_PROJECT != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,7 +108,7 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.CICD_SA }}
       - uses: google-github-actions/setup-gcloud@v2
-      - run: TAG="${GITHUB_SHA::7}" ./Data-Pipeline/composer/deploy.sh ${{ matrix.image }}
+      - run: PROJECT="${GCP_PROJECT}" TAG="${GITHUB_SHA::7}" ./Data-Pipeline/composer/deploy.sh ${{ matrix.image }}
 
   deploy-dag:
     name: update the DAG on Composer (if it is up)
@@ -118,9 +125,13 @@ jobs:
           service_account: ${{ env.CICD_SA }}
       - uses: google-github-actions/setup-gcloud@v2
       - run: |
-          if gcloud composer environments describe ctt-composer \
-               --location us-central1 --project "${GCP_PROJECT}" >/dev/null 2>&1; then
-            ./Data-Pipeline/composer/deploy.sh dag
+          # only a RUNNING environment has a DAG bucket (not one being
+          # created or deleted)
+          state="$(gcloud composer environments describe ctt-composer \
+                     --location us-central1 --project "${GCP_PROJECT}" \
+                     --format='value(state)' 2>/dev/null || true)"
+          if [ "${state}" = "RUNNING" ]; then
+            PROJECT="${GCP_PROJECT}" ./Data-Pipeline/composer/deploy.sh dag
           else
-            echo "Composer is not up; the DAG is uploaded by deploy.sh up"
+            echo "Composer is not running (${state:-absent}); deploy.sh up uploads the DAG"
           fi

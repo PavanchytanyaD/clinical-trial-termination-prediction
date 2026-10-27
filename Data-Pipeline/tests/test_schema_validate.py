@@ -1,8 +1,10 @@
 import copy
+import json
 
 import numpy as np
 import pytest
 
+from scripts import schema_stats
 from scripts.schema_stats import (column_kind, compute_statistics,
                                   infer_suite)
 from scripts.validate import (compare_statistics, describe, run_suite,
@@ -160,3 +162,16 @@ def test_critical_failure_stops_the_pipeline():
     checks = [{"success": False, "severity": "critical"}]
     s = summarize(checks, "baseline", "20261001", "critical")
     assert s["success"] is False and s["stop_pipeline"] is True
+
+
+def test_snapshot_info_comes_from_the_features_meta(tmp_path, monkeypatch):
+    """A task has only its own inputs: no raw snapshot, but the features'
+    meta.json, which preprocess fills from the snapshot's manifest."""
+    meta = tmp_path / "structured_features.meta.json"
+    meta.write_text(json.dumps({"snapshot": "20261101", "source": "db",
+                                "builder": "structured_features"}))
+    monkeypatch.setattr(schema_stats, "RAW_DIR", tmp_path / "no-raw")
+    monkeypatch.setattr(schema_stats, "FEATURES_META", meta)
+    assert schema_stats.snapshot_info() == {
+        "snapshot": "20261101", "source": "db",
+        "builder": "structured_features"}

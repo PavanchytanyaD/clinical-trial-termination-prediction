@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Cloud Composer for the data pipeline in the ctt-mlops project (project ID
-# ctt-mlops-project). Composer is billed every hour it exists and cannot be
-# paused, so it is created for a run and deleted afterwards; the data, run
-# state and Airflow's history (a snapshot) stay in the bucket.
+# Cloud Composer for the data pipeline. By default it works on the team's
+# project ctt-mlops-project; set PROJECT (and optionally REGION, BUCKET) to
+# deploy the same pipeline in your own Google Cloud project. Composer is
+# billed every hour it exists and cannot be paused, so it is created for a
+# run and deleted afterwards; the data, run state and Airflow's history (a
+# snapshot) stay in the bucket.
 # Read composer/README.md first; every step is safe to re-run.
 #
-#   ./composer/deploy.sh <step>
+#   [PROJECT=my-project] ./composer/deploy.sh <step>
 #
 # Once per project:
-#   setup      enable the APIs, create the bucket, give pipeline-sa (the
-#              environment's identity) the Composer roles and cicd-sa (CI)
-#              its build roles
+#   setup      enable the APIs, create the bucket and the service accounts
+#              pipeline-sa (Composer, its pods, the Vertex AI job) and
+#              cicd-sa (image builds), and give them their roles
 #
 # Images (CI builds them on every push; by hand only when needed):
 #   image      pipeline image (Composer pods) -> Artifact Registry
@@ -23,7 +25,12 @@
 #              SAMPLE_TRIALS=...)
 #   freeze     make the latest run's schema and statistics the validation
 #              baseline (REASON="...")
+#   schedule   show how often the pipeline runs, or change it, live:
+#              SCHEDULE="@weekly" (or a cron such as "0 6 * * 1", "none" for
+#              manual runs only, "default" for monthly)
 #   ui         print the Airflow web UI address
+#   lock       copy the latest run's dvc.lock into Data-Pipeline/dvc.lock, to
+#              commit it: Git then keeps the history of the data versions
 #   down       save a snapshot, then delete the environment (billing stops)
 #
 # Single steps of `up`: env, config, secret, dag
@@ -36,8 +43,9 @@ REPO="${REPO:-ctt-images}"                # Artifact Registry repository
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/data-pipeline"
 GPU_IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/biobert-gpu"
 TAG="${TAG:-}"                            # extra image tag, e.g. the git commit
-BUCKET="${BUCKET:-ctt-mlops-project-data}"  # DVC data and run state
+BUCKET="${BUCKET:-${PROJECT}-data}"     # DVC data and run state
 STATE_URI="gs://${BUCKET}/data-pipeline/state"
+DVC_REMOTE="gs://${BUCKET}/dvc-store"
 SNAPSHOTS="gs://${BUCKET}/composer-snapshots"
 ALERT_EMAILS="${ALERT_EMAILS:-}"
 SECRET_NAME="ctt-pipeline-secrets"
@@ -123,19 +131,34 @@ secret_data() {
   done < <(grep -E '^(SMTP_|ALERT_|AACT_)' "${HERE}/.env")
 }
 
+# Create a service account if it does not exist yet
+service_account() {
+  local email="$1" name="${1%%@*}"
+  gc iam service-accounts describe "${email}" >/dev/null 2>&1 \
+    || gc iam service-accounts create "${name}" --display-name "$2"
+}
+
 step() {
   case "$1" in
     setup)
       gc services enable composer.googleapis.com artifactregistry.googleapis.com \
-        cloudbuild.googleapis.com aiplatform.googleapis.com
+        cloudbuild.googleapis.com aiplatform.googleapis.com \
+        iam.googleapis.com storage.googleapis.com
       gc storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1 \
         || gc storage buckets create "gs://${BUCKET}" --location "${REGION}" \
              --uniform-bucket-level-access
+      service_account "${ENV_SA}" "Data pipeline (Composer, pods, Vertex AI)"
+      service_account "${BUILD_SA}" "CI/CD image builds"
       local number
       number="$(gc projects describe "${PROJECT}" --format='value(projectNumber)')"
-      gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
-        --member "serviceAccount:${ENV_SA}" --role roles/composer.worker \
-        --format=none
+      # ENV_SA: Composer worker; its pods read and write the bucket, pull
+      # images, start the Vertex AI job running as itself, and write logs
+      for role in roles/composer.worker roles/storage.objectAdmin \
+          roles/artifactregistry.reader roles/aiplatform.user \
+          roles/iam.serviceAccountUser roles/logging.logWriter; do
+        gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
+          --member "serviceAccount:${ENV_SA}" --role "${role}" --format=none
+      done
       # Composer's own service agent must be allowed to act as ENV_SA
       # (granted on the project: service-account-level IAM is not open to us)
       gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
@@ -146,7 +169,8 @@ step() {
       # images, and upload the DAG when Composer is up
       for role in roles/cloudbuild.builds.editor roles/artifactregistry.writer \
           roles/logging.logWriter roles/serviceusage.serviceUsageConsumer \
-          roles/storage.objectAdmin roles/composer.user; do
+          roles/storage.objectAdmin roles/composer.user \
+          roles/iam.serviceAccountUser; do
         gc projects add-iam-policy-binding "${PROJECT}" --condition=None \
           --member "serviceAccount:${BUILD_SA}" --role "${role}" --format=none
       done
@@ -177,8 +201,11 @@ step() {
     config)
       local smtp=""
       [ -n "$(secret_data)" ] && smtp="${SECRET_NAME}"
+      # "^|^" makes | the separator, so ALERT_EMAILS may contain commas.
+      # The project, bucket and images go to every pod, so the same image
+      # runs in any project.
       gc composer environments update "${ENV_NAME}" --location "${REGION}" \
-        --update-env-variables "CTT_IMAGE=${IMAGE}:latest,CTT_STATE_URI=${STATE_URI},CTT_ALERT_EMAILS=${ALERT_EMAILS},CTT_SMTP_SECRET=${smtp},CTT_SOURCE=${SOURCE:-sample}"
+        --update-env-variables "^|^CTT_IMAGE=${IMAGE}:latest|CTT_STATE_URI=${STATE_URI}|CTT_DVC_REMOTE=${DVC_REMOTE}|CTT_GCP_PROJECT=${PROJECT}|CTT_REGION=${REGION}|CTT_BUCKET=${BUCKET}|CTT_GPU_IMAGE=${GPU_IMAGE}:latest|CTT_SERVICE_ACCOUNT=${ENV_SA}|CTT_ALERT_EMAILS=${ALERT_EMAILS}|CTT_SMTP_SECRET=${smtp}|CTT_SOURCE=${SOURCE:-sample}"
       ;;
     secret)
       local data file
@@ -215,6 +242,20 @@ step() {
     freeze)
       trigger_dag ctt_freeze_baseline \
         "{\"reason\": \"${REASON:-trusted snapshot}\"}"
+      ;;
+    schedule)
+      local var=(gc composer environments run "${ENV_NAME}" --location
+                 "${REGION}" variables --)
+      case "${SCHEDULE:-}" in
+        "") "${var[@]}" get ctt_schedule 2>/dev/null \
+              || echo "default: monthly, the 5th at 06:00 UTC (0 6 5 * *)" ;;
+        default) "${var[@]}" delete ctt_schedule ;;
+        *) "${var[@]}" set ctt_schedule "${SCHEDULE}" ;;
+      esac
+      ;;
+    lock)
+      gc storage cp "${STATE_URI}/dvc.lock" "${HERE}/dvc.lock"
+      echo "commit Data-Pipeline/dvc.lock to record this data version in Git"
       ;;
     ui)
       gc composer environments describe "${ENV_NAME}" --location "${REGION}" \

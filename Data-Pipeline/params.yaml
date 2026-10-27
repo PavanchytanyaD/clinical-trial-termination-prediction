@@ -11,6 +11,13 @@ acquire:
   snapshot: "20261001"
   sample_trials: 500
   seed: 42
+  # db source only: which trials to download (empty = every trial).
+  # Interventional trials registered in 2019: about 24,000 trials, a full
+  # pipeline run in about 30 minutes; recent years are left out because most
+  # of their trials have not ended yet, so their outcome is unknown.
+  registered_from: "2019-01-01"
+  registered_to: "2019-12-31"
+  study_types: [INTERVENTIONAL]
 
 preprocess:
   # auto: src/features/structured_features.py if present, else placeholder
@@ -20,6 +27,13 @@ bias:
   # settings live in configs/bias_config.yaml (Tasks 4 and 5); this only
   # picks the mitigation: reweight or resample
   mitigation_method: reweight
+
+bias_model:
+  # baseline logistic regression, evaluated per subgroup (scripts/bias_model.py)
+  test_share: 0.2             # most recently registered 20% = test set
+  max_gap: 0.10               # flag a best-minus-worst group gap above this
+  regularization: 1.0         # logistic regression C
+  seed: 42
 
 anomalies:
   fail_on: critical           # stop the pipeline on: critical | warning | never

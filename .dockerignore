@@ -1,4 +1,6 @@
-# Used by BuildKit for docker/Dockerfile.gpu (build context = repository root).
+# Build context of the images built from the repository root
+# (Data-Pipeline/docker/Dockerfile and Dockerfile.gpu). Secrets, data and
+# caches never go into an image.
 **/.git
 **/__pycache__
 **/*.py[cod]
@@ -16,3 +18,5 @@ Data-Pipeline/logs/
 Data-Pipeline/.dvc/cache/
 Data-Pipeline/.dvc/tmp/
 Data-Pipeline/.dvc/config.local
+Data-Pipeline/local/output/
+**/.ruff_cache

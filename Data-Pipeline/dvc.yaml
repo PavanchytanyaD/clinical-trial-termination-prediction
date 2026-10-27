@@ -11,7 +11,8 @@
 #
 #   acquire --+--> preprocess --+--> schema_stats --> validate
 #             |                 +--> anomalies
-#             +--> bias
+#             |                 +--> bias_model (with bias)
+#             +--> bias --------------> bias_model
 #             +--> text --> embeddings   (BioBERT, on a Vertex AI GPU)
 stages:
   acquire:
@@ -60,10 +61,28 @@ stages:
       - data/processed/trial_slices.csv
       - reports/bias
 
+  bias_model:
+    cmd: python -m scripts.bias_model
+    deps:
+      - data/processed/structured_features.csv
+      - data/processed/structured_features.meta.json
+      - data/processed/trial_slices.csv
+      - reports/bias
+      - scripts/bias_model.py
+      - scripts/bias.py
+      - ../src/bias/model_slices.py
+      - ../src/bias/slice_report.py
+      - ../configs/bias_config.yaml
+    params:
+      - bias_model
+    outs:
+      - reports/bias_model
+
   schema_stats:
     cmd: python -m scripts.schema_stats
     deps:
       - data/processed/structured_features.csv
+      - data/processed/structured_features.meta.json
       - scripts/schema_stats.py
     params:
       - schema

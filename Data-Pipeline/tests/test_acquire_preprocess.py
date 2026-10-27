@@ -76,3 +76,22 @@ def test_check_contract_rejects_duplicates(features):
 def test_unknown_mode_is_an_error(snapshot_dir):
     with pytest.raises(ConfigError):
         build("magic", snapshot_dir)
+
+
+def test_db_source_passes_the_trial_window(tmp_path, monkeypatch):
+    from scripts import acquire
+    seen = {}
+
+    def fake_export(out_dir, **window):
+        seen.update(window)
+        sample_snapshot.write_snapshot(out_dir, "20261101", n_trials=30)
+
+    monkeypatch.setattr(acquire.fetch_aact, "export_from_db", fake_export)
+    manifest = acquire.acquire(
+        {"source": "db", "snapshot": "20261101",
+         "registered_from": "2019-01-01", "registered_to": "2019-12-31",
+         "study_types": ["INTERVENTIONAL"]}, tmp_path / "snap")
+    assert seen == {"registered_from": "2019-01-01",
+                    "registered_to": "2019-12-31",
+                    "study_types": ["INTERVENTIONAL"]}
+    assert manifest["trials"] == seen

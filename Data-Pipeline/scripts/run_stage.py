@@ -6,14 +6,18 @@ bucket). Airflow decides when and in what order stages run, retries them and
 alerts on failure. Running a stage through DVC means an unchanged stage is
 skipped and every output is versioned.
 
-Every task is a fresh Composer pod started from the pipeline image, so the
-run's shared state lives in GCS (PIPELINE_STATE_URI, default
-gs://ctt-mlops-project-data/data-pipeline/state). Before the stage, the run's
-params.yaml and the latest dvc.lock are downloaded from there and the
-stage's inputs are pulled from the DVC remote;
-after it, the outputs are pushed and dvc.lock is merged back. Logs and
-reports are uploaded even when the stage fails, so a failed validation can be
-read.
+Every task starts from a fresh copy of the code (a Composer pod from the
+pipeline image, or a temporary folder in the local Docker Airflow), so the
+run's shared state lives outside it, in PIPELINE_STATE_URI: a GCS folder
+(default gs://ctt-mlops-project-data/data-pipeline/state) or, locally, a
+plain folder. Before the stage, the run's params.yaml and the latest
+dvc.lock are downloaded from there and the stage's inputs are pulled from
+the DVC remote; after it, the outputs are pushed and dvc.lock is merged back.
+Logs and reports are uploaded even when the stage fails, so a failed
+validation can be read.
+
+PIPELINE_DVC_REMOTE, when set, replaces the DVC remote of .dvc/config (a
+gs:// URL in another Google Cloud project, or a local folder).
 
     python -m scripts.run_stage acquire --param acquire.snapshot=20261001
     python -m scripts.run_stage preprocess
@@ -27,11 +31,14 @@ it before its stages, so validate always compares against it.
 
 import argparse
 import datetime as dt
+import fcntl
+import hashlib
 import json
 import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -42,6 +49,7 @@ import yaml
 from scripts.config import (BASELINE_DIR, DVC_FILE, LOCK_FILE, LOG_DIR,
                             PARAMS_FILE, ROOT,
                             VALIDATION_SUMMARY, load_params)
+from scripts.alerts import send_alert
 from scripts.tracking import run_id, setup_logging
 
 logger = logging.getLogger("run_stage")
@@ -145,6 +153,19 @@ def dvc(*args, check=True):
     return rc
 
 
+def configure_remote():
+    """Point DVC at PIPELINE_DVC_REMOTE, if set (in .dvc/config.local, so
+    the committed config keeps the team's bucket)."""
+    url = os.environ.get("PIPELINE_DVC_REMOTE")
+    if url:
+        dvc("remote", "add", "--local", "--force", "--default", "pipeline",
+            url)
+        project = os.environ.get("PIPELINE_GCP_PROJECT")
+        if url.startswith("gs://") and project:
+            dvc("remote", "modify", "--local", "pipeline", "projectname",
+                project)
+
+
 def remote_url():
     """URL of the default DVC remote, or None."""
     def read(*args):
@@ -164,21 +185,33 @@ def remote_url():
     return url
 
 
-# ---------------------------------------------------------------- GCS state
+# ---------------------------------------------------------------- run state
+# The state folder is a gs:// URI or a local folder; every function below
+# works on both.
 def _gcs():
     from google.cloud import storage
     return storage.Client()
 
 
+def _is_gcs(uri):
+    return str(uri).startswith("gs://")
+
+
 def _split(uri):
-    if not uri.startswith("gs://"):
-        raise ValueError(
-            f"PIPELINE_STATE_URI must start with gs://, got {uri}")
+    if not _is_gcs(uri):
+        raise ValueError(f"not a gs:// URI: {uri}")
     bucket, _, prefix = uri[5:].partition("/")
     return bucket, prefix.strip("/")
 
 
 def download(uri, path):
+    if not _is_gcs(uri):
+        if not Path(uri).is_file():
+            return False
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(uri, path)
+        logger.info("copied %s", uri)
+        return True
     bucket, name = _split(uri)
     blob = _gcs().bucket(bucket).blob(name)
     if not blob.exists():
@@ -190,13 +223,29 @@ def download(uri, path):
 
 
 def upload(path, uri):
+    if not _is_gcs(uri):
+        Path(uri).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, uri)
+        logger.info("copied to %s", uri)
+        return
     bucket, name = _split(uri)
     _gcs().bucket(bucket).blob(name).upload_from_filename(str(path))
     logger.info("uploaded %s", uri)
 
 
+def _local_generation(path):
+    """A local file's 'generation': the md5 of its content (0 = missing)."""
+    path = Path(path)
+    if not path.is_file():
+        return None, 0
+    text = path.read_text()
+    return text, hashlib.md5(text.encode()).hexdigest()
+
+
 def read_versioned(uri):
-    """(text, generation) of a GCS object; (None, 0) if it does not exist."""
+    """(text, generation) of a state file; (None, 0) if it does not exist."""
+    if not _is_gcs(uri):
+        return _local_generation(uri)
     from google.api_core.exceptions import NotFound
     bucket, name = _split(uri)
     blob = _gcs().bucket(bucket).blob(name)
@@ -209,8 +258,21 @@ def read_versioned(uri):
 
 
 def write_if_generation(uri, text, generation):
-    """Write text only if the object is still at that generation (0 = must
+    """Write text only if the file is still at that generation (0 = must
     not exist yet). Returns False when another writer got there first."""
+    if not _is_gcs(uri):
+        path = Path(uri)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # parallel tasks of the local Airflow run in one container: an
+        # exclusive lock makes the check and the write one step
+        with open(f"{path}.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if _local_generation(path)[1] != generation:
+                return False
+            tmp = path.with_name(f".{path.name}.{os.getpid()}")
+            tmp.write_text(text)
+            os.replace(tmp, path)
+        return True
     from google.api_core.exceptions import PreconditionFailed
     bucket, name = _split(uri)
     try:
@@ -230,7 +292,12 @@ def merge_lock_entry(shared_text, own_lock, stage):
 
 
 def download_tree(uri, folder):
-    """Download every object under uri/ into folder; False if none."""
+    """Download every file under uri/ into folder; False if none."""
+    if not _is_gcs(uri):
+        if not Path(uri).is_dir() or not any(Path(uri).rglob("*")):
+            return False
+        shutil.copytree(uri, folder, dirs_exist_ok=True)
+        return True
     bucket, prefix = _split(uri)
     found = False
     for blob in _gcs().list_blobs(bucket, prefix=prefix + "/"):
@@ -251,7 +318,7 @@ def upload_tree(folder, uri):
 
 
 class State:
-    """The run's shared files in gs://.../state."""
+    """The run's shared files in the state folder (GCS or local)."""
 
     def __init__(self, uri, rid):
         self.uri = uri.rstrip("/")
@@ -271,7 +338,7 @@ class State:
         """Merge this stage's entry into the shared dvc.lock.
 
         Parallel tasks (for example bias and preprocess) finish at about the
-        same time, each in its own pod with its own copy of dvc.lock. A plain
+        same time, each in its own pod or folder with its own dvc.lock. A plain
         upload would let the last one overwrite the other's entry, so the
         write is conditional on the object's generation and retried.
         """
@@ -299,7 +366,8 @@ class State:
 
 # ---------------------------------------------------------------- stages
 def open_state():
-    """The run's GCS state; fails early without a real DVC remote."""
+    """The run's state folder; fails early without a real DVC remote."""
+    configure_remote()
     if not remote_url():
         raise RuntimeError("no DVC remote configured; see README 'DVC remote'")
     uri = os.environ.get("PIPELINE_STATE_URI") or DEFAULT_STATE_URI
@@ -382,7 +450,8 @@ def publish():
 
 
 def freeze(reason):
-    """Make the latest schema and statistics the baseline, in GCS."""
+    """Make the latest schema and statistics the baseline, in the state
+    folder."""
     from scripts.schema_stats import freeze as freeze_files
     state = open_state()
     state.pull(False)
@@ -392,6 +461,30 @@ def freeze(reason):
     info = freeze_files(reason)
     upload_tree(BASELINE_DIR, f"{state.uri}/baseline")
     return info
+
+
+def alert_failure(stage, error):
+    """Email the subscribers that a task failed, with the end of its log.
+
+    Under Airflow only the final attempt alerts (PIPELINE_TRY and
+    PIPELINE_MAX_TRIES come from the DAG), so a step that succeeds on a
+    retry sends nothing.
+    """
+    attempt = int(os.environ.get("PIPELINE_TRY") or 1)
+    tries = int(os.environ.get("PIPELINE_MAX_TRIES") or 1)
+    if attempt < tries:
+        logger.info("attempt %d of %d failed; no alert until the last",
+                    attempt, tries)
+        return
+    tail = []
+    for name in (f"{stage}.log", f"run_stage_{stage}.log"):
+        path = LOG_DIR / name
+        if path.exists():
+            lines = path.read_text(errors="replace").splitlines()[-40:]
+            tail += [f"--- last lines of {name} ---", *lines, ""]
+    send_alert(f"task {stage} failed",
+               f"Run: {run_id()}\nTask: {stage} (attempt {attempt} of "
+               f"{tries})\nError: {error}\n\n" + "\n".join(tail))
 
 
 def main():
@@ -414,8 +507,9 @@ def main():
             freeze(args.reason)
         else:
             run_stage(args.stage, args.param)
-    except Exception:
+    except Exception as e:
         logger.exception("run_stage %s failed", args.stage)
+        alert_failure(args.stage, f"{type(e).__name__}: {e}")
         raise SystemExit(1)
 
 

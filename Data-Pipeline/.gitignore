@@ -1,5 +1,8 @@
 .env
-logs/
+# logs are written per task; only the README that explains them is committed
+!logs/
+logs/*
+!logs/README.md
 __pycache__/
 *.py[cod]
 .pytest_cache/

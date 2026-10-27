@@ -5,7 +5,9 @@ The source is set in params.yaml (acquire.source):
 
   sample  placeholder: a small synthetic snapshot (scripts/sample_snapshot.py)
   zip     AACT monthly flat-file export, path or URL (acquire.zip)
-  db      AACT cloud PostgreSQL (AACT_USER / AACT_PASSWORD in the environment)
+  db      AACT cloud PostgreSQL (AACT_USER / AACT_PASSWORD in the environment),
+          limited to the trials in acquire.registered_from / registered_to /
+          study_types (empty: every trial)
 
 zip and db call src/ingestion/fetch_aact.py (Task 1, data acquisition), so
 this step only fixes where the snapshot lands and how it is checked. Every
@@ -40,6 +42,13 @@ def check_tables(out_dir, tables=REQUIRED_TABLES):
     return fetch_aact.validate(Path(out_dir), tables)
 
 
+def trial_window(params):
+    """The db export's trial filter from params.yaml (acquire section)."""
+    return {"registered_from": params.get("registered_from") or None,
+            "registered_to": params.get("registered_to") or None,
+            "study_types": list(params.get("study_types") or [])}
+
+
 def acquire(params, out_dir=RAW_DIR):
     source = params.get("source", "sample")
     snapshot = str(params.get("snapshot")
@@ -68,12 +77,13 @@ def acquire(params, out_dir=RAW_DIR):
         if zip_path != zip_src:
             Path(zip_path).unlink()
     elif source == "db":
-        fetch_aact.export_from_db(out_dir)
+        fetch_aact.export_from_db(out_dir, **trial_window(params))
     else:
         raise ConfigError(f"unknown acquire.source {source!r} "
                           "(use sample, zip or db)")
     manifest = {
         "source": source if source == "db" else params.get("zip"),
+        "trials": trial_window(params) if source == "db" else "all",
         "snapshot": snapshot,
         "fetched_at": dt.datetime.now(dt.timezone.utc).isoformat(
             timespec="seconds"),
