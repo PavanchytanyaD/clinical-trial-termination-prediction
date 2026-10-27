@@ -22,25 +22,7 @@ The data pipeline fetches an AACT snapshot, builds the features and the BioBERT 
                +--> text --> embeddings (BioBERT) -----------------+
 ```
 
-| Guideline item | Where | Owner |
-|---|---|---|
-| 1. Data acquisition | `src/ingestion/fetch_aact.py` | Nithish |
-| 2. Data preprocessing | `src/features/` | Nithish |
-| 3. Test modules | `tests/`, `Data-Pipeline/tests/` | everyone |
-| 4. Pipeline orchestration (Airflow) | `Data-Pipeline/dags/ctt_data_pipeline.py` | Pavanchytanya |
-| 5. Data versioning (DVC) | `Data-Pipeline/dvc.yaml`, `dvc.lock`, `.dvc/` | Pavanchytanya |
-| 6. Tracking and logging | `Data-Pipeline/scripts/tracking.py`, `alerts.py`, `src/logging_utils.py` | Sivapriya (with Pavanchytanya) |
-| 7. Schema and statistics | `Data-Pipeline/scripts/schema_stats.py`, `validate.py` | Sivapriya (with Pavanchytanya) |
-| 8. Anomaly detection and alerts | `Data-Pipeline/scripts/anomalies.py` | Pavanchytanya |
-| 9. Pipeline flow optimization | `Data-Pipeline/docs/pipeline_optimization.md` | Pavanchytanya |
-| Text and BioBERT embeddings stages | `src/features/build_text_sample.py`, `biobert_embeddings.py` (Nithish); `Data-Pipeline/scripts/text.py`, `embeddings.py`, Vertex AI job (Pavanchytanya) | Nithish, Pavanchytanya |
-| Cloud hosting, local Docker Airflow and CI/CD | `.github/workflows/ci.yml`, `Data-Pipeline/composer/`, `Data-Pipeline/local/`, `docker/` | Pavanchytanya |
-| Bias detection and slicing | `src/bias/slicing.py`, `slice_report.py`, `model_slices.py` | Danush, Atharva |
-| Bias mitigation and report | `src/bias/mitigate.py`, `docs/bias_report.md` | Atharva, Danush |
-| Bias check on a baseline model | `Data-Pipeline/scripts/bias_model.py`, `docs/bias_report.md` section 7 | Pavanchytanya |
-| Error handling, code style, contributing | `src/error_handling.py`, `.flake8`, `CONTRIBUTING.md` | Sathyasai |
-
-Every stage is explained in detail in [Data-Pipeline/README.md](Data-Pipeline/README.md).
+Every stage is explained in detail, with a table of where each assignment item is implemented, in [Data-Pipeline/README.md](Data-Pipeline/README.md).
 
 ## Code structure
 
