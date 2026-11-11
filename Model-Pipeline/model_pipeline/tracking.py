@@ -19,8 +19,12 @@ except ImportError:  # tests and quick runs without MLflow installed
 
 
 def _setup(ctx):
-    uri = os.environ.get("MLFLOW_TRACKING_URI") or \
-        (ctx.work / "mlruns").resolve().as_uri()
+    uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if not uri:
+        # A folder of runs, copied to the bucket with the work folder.
+        # MLflow 3 needs this flag to keep using a folder.
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+        uri = (ctx.work / "mlruns").resolve().as_uri()
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(ctx.params["tracking"]["experiment"])
 

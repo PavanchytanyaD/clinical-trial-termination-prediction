@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt -r Model-Pipeline/requirements.txt pytest
+      - run: pip install -r requirements.txt -r Model-Pipeline/requirements.txt pytest "kfp>=2.7,<3"
       - run: cd Model-Pipeline && pytest -q tests
       - run: cd Model-Pipeline && python vertex/pipeline.py
 

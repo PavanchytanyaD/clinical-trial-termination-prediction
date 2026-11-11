@@ -10,3 +10,6 @@ steps:
            "-t", "${_IMAGE}:${_TAG}", "-t", "${_IMAGE}:latest", "."]
 images: ["${_IMAGE}:${_TAG}", "${_IMAGE}:latest"]
 timeout: 1800s
+serviceAccount: projects/ctt-mlops-project/serviceAccounts/cicd-sa@ctt-mlops-project.iam.gserviceaccount.com
+options:
+  logging: CLOUD_LOGGING_ONLY
