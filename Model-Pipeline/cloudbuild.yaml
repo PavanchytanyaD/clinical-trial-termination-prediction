@@ -1,0 +1,12 @@
+# Builds the model pipeline image and pushes it to Artifact Registry.
+#   gcloud builds submit --config Model-Pipeline/cloudbuild.yaml \
+#     --substitutions _TAG=$(git rev-parse --short HEAD) .
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/model-pipeline
+  _TAG: manual
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Model-Pipeline/Dockerfile",
+           "-t", "${_IMAGE}:${_TAG}", "-t", "${_IMAGE}:latest", "."]
+images: ["${_IMAGE}:${_TAG}", "${_IMAGE}:latest"]
+timeout: 1800s
