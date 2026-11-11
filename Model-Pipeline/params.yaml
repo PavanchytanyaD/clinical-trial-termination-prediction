@@ -1,0 +1,84 @@
+# Settings for the model pipeline. Change values here instead of the code.
+
+data:
+  # lock:  the exact data version the data pipeline published: a snapshot's
+  #        dvc.lock in the bucket, with the files from the DVC remote.
+  # local: files already pulled with `dvc pull preprocess bias` in
+  #        Data-Pipeline/ (for quick runs on your machine or Cloud Shell).
+  source: lock
+  bucket: ctt-mlops-project-data
+  versions_prefix: data-pipeline/state/versions
+  dvc_remote: dvc-store
+  snapshot: latest          # or a snapshot date such as 20261027
+  local_dir: ../Data-Pipeline
+  # Paths as they appear in Data-Pipeline/dvc.lock.
+  files:
+    features: data/processed/structured_features.csv
+    meta: data/processed/structured_features.meta.json
+    slices: data/processed/trial_slices.csv
+    weights: reports/bias/mitigation/trial_weights.csv   # optional
+
+split:
+  # Time-based: the most recently registered trials are the test set, the
+  # ones before them the validation set, the oldest the training set.
+  val_share: 0.2
+  test_share: 0.2
+
+seed: 42
+
+# Candidate models and their hyperparameter search spaces.
+# Model owners: widen or narrow your space here.
+models:
+  logreg:
+    search: grid
+    space:
+      C: [0.01, 0.1, 1.0, 10.0]
+  xgboost:
+    search: random
+    n_iter: 12
+    space:
+      n_estimators: [200, 400, 800]
+      max_depth: [3, 4, 6, 8]
+      learning_rate: [0.03, 0.05, 0.1]
+      subsample: [0.7, 0.85, 1.0]
+      colsample_bytree: [0.5, 0.7, 1.0]
+      min_child_weight: [1, 5, 10]
+
+evaluation:
+  threshold: 0.5            # score at or above this counts as "will stop"
+  top_k_share: 0.1          # Precision@K uses the top 10% of scores
+
+bias:
+  slices: [phase, sponsor_class, region, therapeutic_area, gender,
+           age_group, start_era]
+  min_group_size: 100       # smaller groups are reported, not used for gaps
+  min_stopped: 10
+  threshold_slice: region   # mitigation: one decision threshold per region
+  metrics: [recall, pr_auc] # gaps checked for these metrics
+
+gate:
+  min_pr_auc: 0.30          # validation and test must reach these
+  min_roc_auc: 0.60
+  alert_bias_gap: 0.10      # a larger gap sends an alert
+  block_bias_gap: 0.25      # a larger gap blocks the model
+  bias_penalty: 0.5         # selection score = PR-AUC - penalty * max gap
+  min_improvement: 0.0      # new model must beat the champion's test PR-AUC
+
+registry:
+  project: ctt-mlops-project
+  region: us-central1
+  model_name: ctt-termination-model
+  artifacts_prefix: model-pipeline/models
+  # Prebuilt Vertex AI serving images (check the current versions in the
+  # Vertex AI docs, "prebuilt containers for prediction").
+  serving_images:
+    logreg: us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest
+    xgboost: us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest
+
+tracking:
+  experiment: ctt-model-development
+
+alerts:
+  # Secret Manager secret holding the same lines as Data-Pipeline/.env
+  # (email settings). Used when those settings are not in the environment.
+  secret: ctt-pipeline-env

@@ -1,0 +1,11 @@
+# Model pipeline packages, installed on top of the repository's
+# requirements.txt (which already has pandas, numpy, scikit-learn and
+# fairlearn). kfp is installed only where the pipeline is submitted.
+xgboost>=2.1,<4
+mlflow-skinny>=3.0,<4
+shap>=0.47
+matplotlib>=3.8
+pyyaml>=6.0
+gcsfs>=2024.2
+google-cloud-aiplatform>=1.60
+google-cloud-secret-manager>=2.20

@@ -1,0 +1,63 @@
+# On every push to main that changes model code: run the tests, build the
+# image, and run the model pipeline on Vertex AI (train, validate, bias
+# check, select, register). The job fails if the pipeline fails, e.g. when
+# no model passes the validation or bias gate.
+name: model-pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Model-Pipeline/**"
+      - "src/**"
+      - "configs/**"
+      - "Data-Pipeline/scripts/bias_model.py"
+      - ".github/workflows/model-pipeline.yml"
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Data version (e.g. 20261027) or latest"
+        default: latest
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r Model-Pipeline/requirements.txt pytest "kfp>=2.7,<3"
+      - run: cd Model-Pipeline && pytest -q tests
+      - run: cd Model-Pipeline && python vertex/pipeline.py
+
+  train:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.CICD_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Build the image
+        run: |
+          gcloud builds submit --project "${{ vars.GCP_PROJECT }}" \
+            --config Model-Pipeline/cloudbuild.yaml \
+            --substitutions _TAG=${GITHUB_SHA::12} .
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "kfp>=2.7,<3" "google-cloud-aiplatform>=1.60" pyyaml
+      - name: Run the model pipeline on Vertex AI
+        run: |
+          export CTT_MODEL_IMAGE="us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT }}/ctt-images/model-pipeline:${GITHUB_SHA::12}"
+          python Model-Pipeline/vertex/submit.py \
+            --snapshot "${{ github.event.inputs.snapshot || 'latest' }}" \
+            --git-sha "${GITHUB_SHA::12}" --wait
