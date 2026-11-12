@@ -1,15 +1,39 @@
-# On every push to main that changes model code: run the tests, build the
-# image, and run the model pipeline on Vertex AI (train, validate, bias
-# check, select, register). The job fails if the pipeline fails, e.g. when
-# no model passes the validation or bias gate.
+# CI/CD for the model pipeline.
+#
+# Every push (any branch) and pull request that changes model code: style
+# check, the tests and a compile of the Vertex AI pipeline.
+# Pushes to main and pavan/model-pipeline (and a manual run), once the tests
+# passed: build the pipeline and prediction images with Cloud Build and run
+# the model pipeline on Vertex AI (train, validate, bias check, select,
+# test, register). The job fails if the pipeline fails, e.g. when no model
+# passes the validation or bias gate; a failure sends an alert email.
+#
+# Inside the pipeline, notify.alert already emails on a failed stage, no
+# model passing the gate, a bias flag, a failed test set, promotion and a
+# model not promoted (SMTP settings from the Secret Manager secret
+# ctt-pipeline-env). The email at the end of this file covers failures
+# outside the pipeline too (image build, sign-in, submission).
+#
+# Google Cloud sign-in uses Workload Identity Federation (repository
+# variables GCP_PROJECT, WIF_PROVIDER, CICD_SA, as in ci.yml). Without them
+# the Google Cloud steps are skipped with a notice. Optional: the variable
+# MLFLOW_TRACKING_URI (the team's MLflow server, Model-Pipeline/infra/mlflow)
+# and the secrets SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+# ALERT_EMAIL_FROM, ALERT_EMAIL_TO for the failure email.
 name: model-pipeline
 
 on:
   push:
-    branches: [main]
     paths:
       - "Model-Pipeline/**"
-      - "src/**"
+      - "src/bias/**"
+      - "configs/**"
+      - "Data-Pipeline/scripts/bias_model.py"
+      - ".github/workflows/model-pipeline.yml"
+  pull_request:
+    paths:
+      - "Model-Pipeline/**"
+      - "src/bias/**"
       - "configs/**"
       - "Data-Pipeline/scripts/bias_model.py"
       - ".github/workflows/model-pipeline.yml"
@@ -21,43 +45,101 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
   test:
+    name: lint and test Model-Pipeline/
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt -r Model-Pipeline/requirements.txt pytest "kfp>=2.7,<3"
-      - run: cd Model-Pipeline && pytest -q tests
-      - run: cd Model-Pipeline && python vertex/pipeline.py
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # the CPU build of torch first, so pip does not fetch the CUDA one
+      - run: pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r Model-Pipeline/requirements-dev.txt
+      - run: flake8 Model-Pipeline
+      - run: pytest -q tests
+        working-directory: Model-Pipeline
+      - run: python vertex/pipeline.py
+        working-directory: Model-Pipeline
 
   train:
+    name: run the model pipeline on Vertex AI
     needs: test
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/main' ||
+        github.ref == 'refs/heads/pavan/model-pipeline'))
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write   # for Workload Identity Federation
+    concurrency:
+      group: model-pipeline-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
     steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check the Google Cloud settings
+        id: gcp
+        run: |
+          if [ -n "${{ vars.GCP_PROJECT }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ] \
+             && [ -n "${{ vars.CICD_SA }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GCP_PROJECT, WIF_PROVIDER or CICD_SA is not set; the Vertex AI run is skipped"
+          fi
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
+        if: steps.gcp.outputs.ready == 'true'
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.CICD_SA }}
       - uses: google-github-actions/setup-gcloud@v2
-      - name: Build the image
+        if: steps.gcp.outputs.ready == 'true'
+      - name: Build the images
+        if: steps.gcp.outputs.ready == 'true'
         run: |
-          gcloud builds submit --project "${{ vars.GCP_PROJECT }}" \
+          REPO="us-central1-docker.pkg.dev/${GCP_PROJECT}/ctt-images"
+          gcloud builds submit --project "${GCP_PROJECT}" \
             --config Model-Pipeline/cloudbuild.yaml \
-            --substitutions _TAG=${GITHUB_SHA::12} .
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install "kfp>=2.7,<3" "google-cloud-aiplatform>=1.60" pyyaml
+            --gcs-source-staging-dir "gs://${GCP_PROJECT}-data/cloudbuild-source" \
+            --substitutions "_TAG=${GITHUB_SHA::12},_IMAGE=${REPO}/model-pipeline,_SERVING_IMAGE=${REPO}/model-serving" .
+      - if: steps.gcp.outputs.ready == 'true'
+        run: pip install "kfp>=2.7,<3" "google-cloud-aiplatform==2.9.0" pyyaml
       - name: Run the model pipeline on Vertex AI
+        if: steps.gcp.outputs.ready == 'true'
         run: |
-          export CTT_MODEL_IMAGE="us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT }}/ctt-images/model-pipeline:${GITHUB_SHA::12}"
+          REPO="us-central1-docker.pkg.dev/${GCP_PROJECT}/ctt-images"
+          export CTT_MODEL_IMAGE="${REPO}/model-pipeline:${GITHUB_SHA::12}"
+          export CTT_SERVING_IMAGE="${REPO}/model-serving:${GITHUB_SHA::12}"
           python Model-Pipeline/vertex/submit.py \
             --snapshot "${{ github.event.inputs.snapshot || 'latest' }}" \
             --git-sha "${GITHUB_SHA::12}" --wait
+      - name: Email the failure
+        if: failure()
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        working-directory: Model-Pipeline
+        run: |
+          pip install pyyaml==6.0.3 >/dev/null
+          python -m model_pipeline.notify \
+            "CI model pipeline job failed on ${GITHUB_REF_NAME}" \
+            --body "Commit ${GITHUB_SHA::12} by ${GITHUB_ACTOR}. Logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
