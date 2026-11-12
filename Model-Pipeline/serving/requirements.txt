@@ -1,0 +1,11 @@
+# Prediction server (serving/Dockerfile). The model libraries have the
+# same pins as the training image (../requirements.txt), so a pickled model
+# loads with the versions it was trained with. torch (CPU build) is added by
+# the Dockerfile for the PyTorch model family.
+numpy==2.3.3
+scikit-learn==1.9.1
+xgboost==3.2.0
+joblib==1.6.0
+fastapi==0.162.5
+uvicorn==0.54.0
+google-cloud-storage==3.17.1
