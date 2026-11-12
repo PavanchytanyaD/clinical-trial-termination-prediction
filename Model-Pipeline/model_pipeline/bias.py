@@ -158,4 +158,3 @@ def run(ctx):
                            s["slice"], s["metric"], s["max_gap"],
                            gate["alert_bias_gap"])
     return summary
-

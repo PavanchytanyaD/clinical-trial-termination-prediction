@@ -8,7 +8,7 @@ import numpy as np  # noqa: E402
 
 
 def compare_models(table, path, cols=("pr_auc", "roc_auc", "recall",
-                                       "precision", "precision_at_k")):
+                                      "precision", "precision_at_k")):
     """Grouped bars: one group per metric, one bar per candidate."""
     names = list(table)
     x = np.arange(len(cols))
