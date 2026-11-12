@@ -41,7 +41,8 @@ def test_param_grid_grid_and_random():
 
 
 def test_choose_prefers_fair_model_and_blocks_biased():
-    rows = {"a": {"pr_auc": 0.50, "roc_auc": 0.8, "max_gap": 0.30},
+    rows = {"a": {"pr_auc": 0.50, "roc_auc": 0.8, "max_gap": 0.30,
+                  "bias_blocked": True},
             "b": {"pr_auc": 0.46, "roc_auc": 0.8, "max_gap": 0.05},
             "c": {"pr_auc": 0.48, "roc_auc": 0.8, "max_gap": 0.20}}
     winner, table = select.choose(rows, GATE)
