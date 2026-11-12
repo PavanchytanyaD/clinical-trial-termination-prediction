@@ -69,11 +69,19 @@ registry:
   region: us-central1
   model_name: ctt-termination-model
   artifacts_prefix: model-pipeline/models
-  # Prebuilt Vertex AI serving images (check the current versions in the
-  # Vertex AI docs, "prebuilt containers for prediction").
-  serving_images:
-    logreg: us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest
-    xgboost: us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest
+  # Our own prediction container (serving/Dockerfile, built by
+  # cloudbuild.yaml): it loads the artifact with the training versions of
+  # scikit-learn, XGBoost and torch and returns probabilities and labels
+  # with the per-group thresholds. CI sets CTT_SERVING_IMAGE to the image of
+  # the same commit; this is the fallback.
+  serving_container_image_uri: us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/model-serving:latest
+  predict_route: /predict
+  health_route: /health
+  serving_port: 8080
+  # When the champion cannot be scored on the new test set (its artifact is
+  # missing, or it needs features the new data version lacks): keep it
+  # (promote by hand with `registry rollback --version N`) or promote.
+  on_champion_unscorable: keep
 
 tracking:
   experiment: ctt-model-development
