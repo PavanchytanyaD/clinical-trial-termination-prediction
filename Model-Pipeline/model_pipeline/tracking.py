@@ -10,6 +10,8 @@ import logging
 import os
 from contextlib import contextmanager
 
+from model_pipeline import mlflow_auth
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -25,6 +27,7 @@ def _setup(ctx):
         # MLflow 3 needs this flag to keep using a folder.
         os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
         uri = (ctx.work / "mlruns").resolve().as_uri()
+    mlflow_auth.ensure_token(uri)   # ID token for a Cloud Run server
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(ctx.params["tracking"]["experiment"])
 
