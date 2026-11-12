@@ -54,17 +54,47 @@ def confusion(y, s, threshold, path, title):
     plt.close(fig)
 
 
-def bias_gaps(gaps, metric, path):
-    """Bars of the best-minus-worst group gap per slice and candidate."""
-    if gaps.empty:
+def bias_gap_bars(slices, metric, names, path, title, alert, block):
+    """Worst-group gap per slice (overall minus worst group) for the given
+    candidates, with the bootstrap interval as error bars and the alert and
+    block levels as lines. Report-only slices are marked "(report)"."""
+    rows = slices[(slices["metric"] == metric)
+                  & slices["model"].isin(names)]
+    if rows.empty:
         return
-    pivot = gaps.pivot_table(index="slice", columns="model", values=metric)
-    ax = pivot.plot.bar(figsize=(10, 4.5))
-    ax.set_ylabel(f"{metric} gap (best group - worst group)")
-    ax.set_title(f"{metric} gap per slice (validation set)")
-    plt.tight_layout()
-    plt.savefig(path, dpi=120)
-    plt.close("all")
+    order = list(dict.fromkeys(rows.sort_values("role", ascending=True)
+                               ["slice"]))
+    labels = []
+    for s in order:
+        r = rows[rows["slice"] == s]
+        labels.append(s + ("" if r["role"].iloc[0] == "gate"
+                           else "\n(report)")
+                      + ("\n(too few groups)" if r["gap"].isna().all()
+                         else ""))
+    x = np.arange(len(order))
+    width = 0.8 / max(len(names), 1)
+    fig, ax = plt.subplots(figsize=(max(7, 1.3 * len(order)), 4.5))
+    for i, name in enumerate(names):
+        g = rows[rows["model"] == name].set_index("slice").reindex(order)
+        gap = g["gap"].to_numpy(dtype=float)
+        err = np.vstack([gap - g["ci_low"].to_numpy(dtype=float),
+                         g["ci_high"].to_numpy(dtype=float) - gap])
+        ax.bar(x + i * width, np.nan_to_num(gap), width, label=name)
+        ax.errorbar(x + i * width, np.nan_to_num(gap),
+                    yerr=np.nan_to_num(np.clip(err, 0, None)), fmt="none",
+                    ecolor="black", elinewidth=1, capsize=3)
+    ax.axhline(alert, color="orange", linestyle="--", linewidth=1,
+               label=f"alert {alert}")
+    ax.axhline(block, color="red", linestyle="--", linewidth=1,
+               label=f"block {block}")
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xticks(x + width * (len(names) - 1) / 2, labels, fontsize=8)
+    ax.set_ylabel(f"{metric}: overall - worst group")
+    ax.set_title(title)
+    ax.legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
 
 
 def bars(series, path, title, xlabel):

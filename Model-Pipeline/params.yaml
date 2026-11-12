@@ -49,19 +49,38 @@ evaluation:
   top_k_share: 0.1          # Precision@K uses the top 10% of scores
 
 bias:
-  slices: [phase, sponsor_class, region, therapeutic_area, gender,
-           age_group, start_era]
-  min_group_size: 100       # smaller groups are reported, not used for gaps
-  min_stopped: 10
-  threshold_slice: region   # mitigation: one decision threshold per region
+  # Gating slices can block a model; report slices are reported and can
+  # raise an alert, but do not block (many small groups, or groups that
+  # differ in how often their trials stop for reasons a model cannot fix).
+  gating_slices: [region, phase, sponsor_class]
+  report_slices: [therapeutic_area, gender, age_group, start_era]
   metrics: [recall, pr_auc] # gaps checked for these metrics
+  # Gap = overall minus worst qualified group. A group qualifies with at
+  # least min_group_size trials and min_stopped stopped ones (UNKNOWN never
+  # does); a slice is checked only with at least min_groups of them.
+  min_group_size: 100
+  min_stopped: 10
+  min_groups: 2
+  # Percentile bootstrap interval of every group gap; a gap counts as above
+  # a level only if the interval's lower bound is above it.
+  bootstrap: 200            # resamples (0: use the point gap)
+  ci_level: 0.90
+  # Mitigation: one decision threshold per group, fitted on the validation
+  # set (cross-fitted over threshold_folds parts). One candidate per entry;
+  # a list is applied one slice after the other. Single-valued slices only.
+  threshold_slices:
+    - [region]
+    - [region, phase]
+  threshold_folds: 2
 
 gate:
   min_pr_auc: 0.30          # validation and test must reach these
   min_roc_auc: 0.60
-  alert_bias_gap: 0.10      # a larger gap sends an alert
-  block_bias_gap: 0.25      # a larger gap blocks the model
-  bias_penalty: 0.5         # selection score = PR-AUC - penalty * max gap
+  alert_bias_gap: 0.10      # a gap clearly above this sends an alert
+  block_bias_gap: 0.25      # a gating-slice gap clearly above this blocks
+  insufficient_bias_data: block   # no gating slice checked: block or alert
+  bias_penalty: 0.5         # score = PR-AUC - penalty * largest gating gap
+  max_test_tries: 3         # ranked candidates tried on the test set
   min_improvement: 0.0      # new model must beat the champion's test PR-AUC
 
 registry:
