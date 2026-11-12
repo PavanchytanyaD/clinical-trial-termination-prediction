@@ -1,11 +1,28 @@
-# Model pipeline packages, installed on top of the repository's
-# requirements.txt (which already has pandas, numpy, scikit-learn and
-# fairlearn). kfp is installed only where the pipeline is submitted.
-xgboost>=2.1,<4
-mlflow-skinny>=3.0,<4
-shap>=0.47
-matplotlib>=3.8
-pyyaml>=6.0
-gcsfs>=2024.2
-google-cloud-aiplatform>=1.60
-google-cloud-secret-manager>=2.20
+# Everything the model pipeline imports (its own code, src/bias and the
+# data pipeline's scripts/bias_model.py), and nothing else: the image does
+# not install the repository's requirements.txt (CUDA torch, transformers,
+# psycopg2). The versions are the ones the models are trained and tested
+# with; serving/requirements.txt has the same model library pins.
+#
+# torch: install the CPU build first, then this file:
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+# (pip then keeps the CPU build; without the first line it downloads the
+# CUDA build, several GB.)
+numpy==2.3.3
+pandas==3.0.1
+scikit-learn==1.9.1
+fairlearn==0.15.0
+# xgboost-cpu: the same library without the CUDA build and NCCL (400 MB);
+# it has Linux wheels only, so other systems get xgboost
+xgboost-cpu==3.2.0; sys_platform == "linux"
+xgboost==3.2.0; sys_platform != "linux"
+torch==2.6.0
+joblib==1.6.0
+pyyaml==6.0.3
+shap==0.51.0
+matplotlib==3.11.2
+mlflow-skinny==3.18.0
+gcsfs==2026.10.1
+google-cloud-aiplatform==2.9.0
+google-cloud-secret-manager==2.32.0

@@ -2,16 +2,19 @@
 # Build from the repository root (the code reuses src/ and the data
 # pipeline's scripts/):
 #   docker build -f Model-Pipeline/Dockerfile -t model-pipeline .
+# Only the model pipeline's own requirements are installed, with the CPU
+# build of torch (training runs on CPU machines).
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
+    MPLBACKEND=Agg
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt /app/requirements.txt
 COPY Model-Pipeline/requirements.txt /app/Model-Pipeline/requirements.txt
-RUN pip install -r requirements.txt -r Model-Pipeline/requirements.txt
+RUN pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install -r Model-Pipeline/requirements.txt
 
 COPY src/ /app/src/
 COPY configs/ /app/configs/

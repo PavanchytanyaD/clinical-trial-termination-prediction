@@ -15,3 +15,9 @@ Data-Pipeline/schema/generated/
 **/__pycache__/
 **/.pytest_cache/
 **/.ruff_cache/
+Model-Pipeline/runs/
+Model-Pipeline/vertex/ctt_model_pipeline.json
+**/mlruns/
+**/.venv*/
+**/venv*/
+**/*-venv/

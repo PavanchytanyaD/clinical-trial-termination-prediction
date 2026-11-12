@@ -1,0 +1,9 @@
+# Tests, style check and pipeline compilation (CI and laptops):
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r Model-Pipeline/requirements-dev.txt
+-r requirements.txt
+-r serving/requirements.txt
+httpx==0.28.1
+pytest==9.0.2
+flake8==7.1.1
+kfp>=2.7,<3

@@ -20,3 +20,10 @@ Data-Pipeline/.dvc/tmp/
 Data-Pipeline/.dvc/config.local
 Data-Pipeline/local/output/
 **/.ruff_cache
+# model pipeline: local runs, compiled pipeline, virtual environments
+Model-Pipeline/runs/
+Model-Pipeline/vertex/ctt_model_pipeline.json
+**/mlruns
+**/.venv*
+**/venv*
+**/*-venv
