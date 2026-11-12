@@ -19,11 +19,12 @@ load_data → train → validate → bias → select → test → register
 | `select` | Eligible if PR-AUC and ROC-AUC pass the gate and the largest subgroup gap is under the block level; winner = highest PR-AUC − 0.5 × gap. Stops the run if none passes. | `reports/selection.md` |
 | `test` | Selected model on the untouched test set; must pass the gate again; packages the model. | `reports/test/`, `artifact/` |
 | `sensitivity` | SHAP feature importance; hyperparameter sensitivity from the search. | `reports/sensitivity/` |
-| `register` | New version in the Vertex AI Model Registry (alias `challenger`); `champion` moves only if the test PR-AUC is not worse than the current champion's. | `reports/registry.json` |
+| `register` | New version in the Vertex AI Model Registry, served by our own container (`serving/`), alias `challenger`. The current champion is downloaded and scored on this run's test set; `champion` and the default version move to the new version only if its test PR-AUC on the same rows is not worse (plus `min_improvement`). | `reports/registry.json` |
 
 Email alerts (same subscribers as the data pipeline) on: a failed stage, no
 model passing the gate, bias above the alert level, a model failing on the
-test set, promotion, and a model not promoted.
+test set, promotion, a model not promoted, a manual rollback, and a failed
+CI pipeline job.
 
 ## Assignment items
 
@@ -43,7 +44,9 @@ test set, promotion, and a model not promoted.
 | CI/CD: train, validate, bias, registry on push (7.1 to 7.4) | `.github/workflows/model-pipeline.yml` |
 | Alerts (7.5) | `notify.py` |
 | Rollback (7.6) | `registry.py` (champion alias, `rollback` command) |
-| Docker (8.1) | `Dockerfile`, `cloudbuild.yaml` |
+| Docker (8.1) | `Dockerfile`, `serving/Dockerfile`, `cloudbuild.yaml` |
+| Serving the registered model | `serving/app.py`, `model_pipeline/artifact.py` |
+| Shared MLflow server | `infra/mlflow/` |
 
 ## Run it
 
@@ -51,7 +54,8 @@ test set, promotion, and a model not promoted.
 
 ```bash
 cd Data-Pipeline && dvc pull preprocess bias && cd ../Model-Pipeline
-pip install pandas scikit-learn fairlearn -r requirements.txt
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
 python -m model_pipeline.run --stage all --source local --skip-register
 ```
 
@@ -61,7 +65,9 @@ Reports are in `Model-Pipeline/runs/local/`.
 
 ```bash
 gcloud builds submit --config Model-Pipeline/cloudbuild.yaml \
-  --substitutions _TAG=$(git rev-parse --short HEAD) .
+  --gcs-source-staging-dir gs://ctt-mlops-project-data/cloudbuild-source \
+  --substitutions _TAG=$(git rev-parse --short=12 HEAD) .
+export MLFLOW_TRACKING_URI=https://ctt-mlflow-...run.app   # optional
 python Model-Pipeline/vertex/submit.py --snapshot latest
 ```
 
@@ -76,7 +82,57 @@ python -m model_pipeline.registry status
 python -m model_pipeline.registry rollback --version 2
 ```
 
-**Tests:** `cd Model-Pipeline && pytest -q tests`
+`rollback` moves the `champion` alias and the default version to that
+version (it works forward too, e.g. to promote a version the stage kept
+back) and sends an alert.
+
+**Tests:** `cd Model-Pipeline && pip install -r requirements-dev.txt && pytest -q tests`
+
+## Images
+
+Both are built from the repository root by `cloudbuild.yaml`:
+
+| Image | Dockerfile | What |
+|---|---|---|
+| `model-pipeline` | `Dockerfile` | every Vertex AI stage. Only `requirements.txt` (pinned, CPU torch, `xgboost-cpu`), not the repository's requirements with CUDA torch and transformers. |
+| `model-serving` | `serving/Dockerfile` | the serving container of every registry version |
+
+## Serving
+
+Each registry version points at our own container: FastAPI and uvicorn
+(`serving/app.py`), with the same scikit-learn, XGBoost and torch versions
+as training. It loads the version's artifact (`model.joblib` and
+`model_card.json` from the test stage) from `AIP_STORAGE_URI`, listens on
+`AIP_HTTP_PORT` and answers on `AIP_HEALTH_ROUTE` and `AIP_PREDICT_ROUTE`:
+
+```json
+POST /predict
+{"instances": [{"<feature>": 0.3, "...": 1, "region": "US_only"}]}
+{"predictions": [{"probability": 0.71, "score": 0.66, "label": 1, "threshold": 0.44, "group": "US_only"}]}
+```
+
+`probability` is the model's own probability; for a group_thresholds model
+`label` uses the cut of the trial's group (`threshold`), exactly as the
+pipeline scored it. Any model object with `predict_proba` loads the same
+way (joblib or pickle), so the PyTorch family needs no change here. Try it
+locally:
+
+```bash
+docker build -f Model-Pipeline/serving/Dockerfile -t model-serving .
+docker run -p 8080:8080 -e MODEL_DIR=/model \
+  -v "$PWD/Model-Pipeline/runs/local/artifact:/model:ro" model-serving
+```
+
+## CI
+
+`.github/workflows/model-pipeline.yml`: on every push and pull request that
+changes `Model-Pipeline/`, `src/bias/` or the bias code it reuses, flake8,
+the tests and a compile of the Vertex AI pipeline. On pushes to `main` and
+`pavan/model-pipeline` (or a manual run) it then builds both images and
+runs the pipeline on Vertex AI, waiting for the result. The Google Cloud
+steps are skipped when the repository variables `GCP_PROJECT`,
+`WIF_PROVIDER` and `CICD_SA` are not set; `MLFLOW_TRACKING_URI` (variable)
+and the `SMTP_*` / `ALERT_EMAIL_*` secrets are optional.
 
 ## Settings
 
