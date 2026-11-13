@@ -34,8 +34,9 @@ Numbers will move when the pipeline runs on a larger data version.
 overlapping 512-token windows and mean-pooled). Six fields of 768 numbers
 are too many next to 155 structured features on 10k training trials, so
 `load_data` reduces each field to 16 PCA components, fitted on the training
-split only. 16 per field was the best of 8, 16, 32 and 64 in a quick check
-(logistic regression and NN validation PR-AUC). The fitted PCAs are saved
+split only. In a quick check of 8, 16, 32 and 64 per field, logistic
+regression barely moved (validation PR-AUC 0.455 to 0.467, best at 32) and
+the NN did best at 16 (single seed, so noisy); 16 is the default. The fitted PCAs are saved
 with the model (`text_pca.joblib`) so inference applies the same reduction.
 
 ## 3. Models
@@ -138,25 +139,29 @@ team can switch to sigmoid, which was almost as good (Brier 0.1286).
 
 The model scores a trial at registration, so for a stopped trial it flags
 the warning comes `stop date - registration date` ahead of the stop. Stop
-dates come from the AACT studies table (actual completion date, else
-actual primary completion date, else the last update; never a feature).
+dates come from the AACT studies table, never as a feature. Only trials
+with an actual completion (or primary completion) date are measured: for
+170 of the 622 stopped test trials (mostly withdrawn and suspended) the
+only date is the record's last update, which can be years after the stop.
 
 | Test set, NN | |
 |---|---|
 | Stopped trials flagged | 469 of 622 (recall 0.754) |
-| Median lead time | **33.9 months** (IQR 21.3 to 48.6) |
-| Flagged more than 12 months ahead | **87%** |
-| Registered after they had already stopped | 3 (left out) |
+| Flagged with an actual stop date (measured) | 334 |
+| Median lead time | **35.3 months** (IQR 22.3 to 48.5) |
+| Flagged more than 12 months ahead | **90%** |
+| Registered after they had already stopped | 2 (left out) |
 
-**Recall by time from registration to stop:**
+**Recall by time from registration to stop** (trials with an actual stop
+date):
 
 | Time to stop | Stopped trials | Recall |
 |---|---|---|
-| 0 to 6 months | 50 | 0.46 |
-| 6 to 12 months | 67 | 0.55 |
-| 12 to 24 months | 116 | 0.76 |
-| 24 to 36 months | 126 | 0.81 |
-| 36+ months | 257 | 0.84 |
+| 0 to 6 months | 36 | 0.33 |
+| 6 to 12 months | 48 | 0.46 |
+| 12 to 24 months | 82 | 0.74 |
+| 24 to 36 months | 93 | 0.82 |
+| 36+ months | 187 | 0.86 |
 
 The model is weakest on trials that stop within a year. These often stop
 for reasons that don't show up at registration (funding, a sponsor

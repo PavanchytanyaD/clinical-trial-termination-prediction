@@ -4,8 +4,12 @@ The model scores a trial when it is registered, so for a stopped trial it
 flags (a true positive on the test set) the warning comes
     lead time = stop date - registration date
 ahead of the stop. The stop date comes from the AACT studies table (see
-data.stop_dates); it is never a feature. Trials whose stop date is before
-their registration (registered after the fact) are counted separately.
+data.stop_dates); it is never a feature. Lead times use only trials with
+an actual (primary) completion date. For the others (mostly withdrawn and
+suspended trials) the only date is the record's last update, which can be
+years after the stop, so they are counted but not measured. Trials whose
+stop date is before their registration (registered after the fact) are
+counted separately.
 
 Error analysis on the same test set:
   - recall per final status (terminated, withdrawn, suspended);
@@ -25,6 +29,7 @@ from model_pipeline import plots, tracking
 
 logger = logging.getLogger(__name__)
 DAYS_PER_MONTH = 30.44
+ACTUAL_DATES = ("completion", "primary_completion")
 BUCKETS = [0, 6, 12, 24, 36, np.inf]
 SHOW = ["nct_id", "score", "probability", "overall_status", "phase",
         "sponsor_class", "therapeutic_area", "study_first_submitted_date",
@@ -32,10 +37,12 @@ SHOW = ["nct_id", "score", "probability", "overall_status", "phase",
 
 
 def months_to_stop(rows):
+    """Months from registration to an actual stop date; NaN without one."""
     start = pd.to_datetime(rows["study_first_submitted_date"],
                            errors="coerce")
-    return (pd.to_datetime(rows["stop_date"]) - start).dt.days \
+    months = (pd.to_datetime(rows["stop_date"]) - start).dt.days \
         / DAYS_PER_MONTH
+    return months.where(rows["stop_date_source"].isin(ACTUAL_DATES))
 
 
 def summary(months):
@@ -73,9 +80,10 @@ def markdown(result, by_status, by_time):
              f"Model: {result['candidate']}. Lead time = stop date - "
              "registration date, for stopped trials the model flagged.", ""]
     if "median_months" in tp:
-        lines += [f"- Flagged stopped trials: {tp['n']} "
-                  f"({tp['n_after_the_fact']} registered after they "
-                  "stopped, left out below)",
+        lines += [f"- Flagged stopped trials: {result['n_flagged']} of "
+                  f"{result['n_stopped']}; {tp['n']} with an actual stop "
+                  f"date are measured ({tp['n_after_the_fact']} of them "
+                  "registered after they stopped, left out below)",
                   f"- Median lead time: **{tp['median_months']:.1f} months** "
                   f"(IQR {tp['q25_months']:.1f} to {tp['q75_months']:.1f})",
                   f"- Flagged more than 12 months ahead: "
@@ -87,6 +95,8 @@ def markdown(result, by_status, by_time):
               table_md(by_status), "",
               "## Recall per time from registration to stop", "",
               table_md(by_time), "",
+              "Only trials with an actual stop date; withdrawn and "
+              "suspended trials often have none.", "",
               "Top false positives and false negatives: "
               "top_false_positives.csv, top_false_negatives.csv."]
     return "\n".join(lines) + "\n"
@@ -107,6 +117,7 @@ def run(ctx):
     stopped = rows[rows["label"] == 1].copy()
     tp = stopped[stopped["flagged"]]
     result = {"candidate": name,
+              "n_stopped": int(len(stopped)), "n_flagged": int(len(tp)),
               "true_positives": summary(tp["months_to_stop"]),
               "all_stopped": summary(stopped["months_to_stop"]),
               "missed_stopped": summary(

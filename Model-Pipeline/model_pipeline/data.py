@@ -179,6 +179,7 @@ def text_features(parts, embeddings, n_components, seed):
 
     ids, arrays = embeddings
     position = pd.Series(np.arange(len(ids)), index=ids)
+    position = position[~position.index.duplicated()]
     columns, reducers = [], {}
     rows_of = {name: position.reindex(df["nct_id"]).to_numpy()
                for name, df in parts.items()}
@@ -209,13 +210,20 @@ def stop_dates(raw):
     None without it. The stop date is the actual completion date, else the
     actual primary completion date, else the last update (withdrawn trials
     often have neither)."""
-    if not (raw / "studies.txt").exists():
+    path = raw / "studies.txt"
+    if not path.exists():
         return None
     from src.features.build_text_sample import read_chunks
 
     cols = ["nct_id", "completion_date", "completion_date_type",
             "primary_completion_date", "primary_completion_date_type",
             "last_update_submitted_date"]
+    with open(path, encoding="utf-8") as f:
+        header = set(f.readline().rstrip("\r\n").split("|"))
+    if not set(cols) <= header:     # e.g. the data pipeline's sample data
+        logger.warning("studies table has no stop-date columns (%s); lead "
+                       "time skipped", ", ".join(sorted(set(cols) - header)))
+        return None
     s = pd.concat(read_chunks(raw, "studies", cols), ignore_index=True)
     s = s.drop_duplicates("nct_id")
     choices = [

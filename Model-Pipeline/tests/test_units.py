@@ -121,6 +121,94 @@ def test_stop_dates_prefer_actual_dates(tmp_path):
     assert s.loc["C", "stop_date_source"] == "last_update"
 
 
+def test_stop_dates_skip_a_table_without_date_columns(tmp_path):
+    (tmp_path / "studies.txt").write_text(
+        "nct_id|overall_status|start_date\nA|COMPLETED|2020-01-01\n")
+    assert data.stop_dates(tmp_path) is None
+
+
+class FakeBucket:
+    """The few gcsfs calls data.download makes, over a dict of objects."""
+
+    def __init__(self, objects):
+        self.objects = objects
+
+    def exists(self, path):
+        return path in self.objects
+
+    def get(self, path, dest):
+        from pathlib import Path
+        Path(dest).write_bytes(self.objects[path])
+
+    def cat(self, path):
+        return self.objects[path]
+
+
+def test_download_from_lock_gets_embeddings_and_studies(tmp_path,
+                                                        monkeypatch):
+    import json as js
+    import yaml
+    remote = "b/dvc-store/files/md5"
+    lock = {"stages": {
+        "preprocess": {"outs": [
+            {"path": "data/processed/structured_features.csv",
+             "md5": "aa01"},
+            {"path": "data/processed/structured_features.meta.json",
+             "md5": "aa02"},
+            {"path": "data/processed/trial_slices.csv", "md5": "aa03"}]},
+        "embeddings": {"outs": [{"path": "data/processed/embeddings",
+                                 "md5": "bb00.dir"}]},
+        "acquire": {"outs": [{"path": "data/raw/aact_snapshot",
+                              "md5": "cc00.dir"}]}}}
+    objects = {
+        "b/v/1/dvc.lock": yaml.safe_dump(lock).encode(),
+        f"{remote}/aa/01": b"features", f"{remote}/aa/02": b"meta",
+        f"{remote}/aa/03": b"slices",
+        f"{remote}/bb/00.dir": js.dumps([
+            {"relpath": "ids.txt", "md5": "bb01"},
+            {"relpath": "meta.json", "md5": "bb02"},
+            {"relpath": "title.npy", "md5": "bb03"}]).encode(),
+        f"{remote}/bb/01": b"ids", f"{remote}/bb/02": b"{}",
+        f"{remote}/bb/03": b"npy",
+        f"{remote}/cc/00.dir": js.dumps([
+            {"relpath": "studies.txt", "md5": "cc01"}]).encode(),
+        f"{remote}/cc/01": b"studies"}
+    import gcsfs
+    monkeypatch.setattr(gcsfs, "GCSFileSystem",
+                        lambda: FakeBucket(objects))
+
+    class Ctx:
+        params = {"data": {
+            "source": "lock", "bucket": "b", "versions_prefix": "v",
+            "dvc_remote": "dvc-store", "snapshot": "1",
+            "files": {"features": "data/processed/structured_features.csv",
+                      "meta": "data/processed/structured_features.meta.json",
+                      "slices": "data/processed/trial_slices.csv",
+                      "studies": "data/raw/aact_snapshot/studies.txt"},
+            "embeddings": {"dir": "data/processed/embeddings",
+                           "fields": ["title", "inclusion"]}}}
+
+    version = data.download(Ctx(), tmp_path)
+    assert (tmp_path / "studies.txt").read_bytes() == b"studies"
+    assert (tmp_path / "embeddings" / "title.npy").read_bytes() == b"npy"
+    assert (tmp_path / "embeddings" / "ids.txt").exists()
+    assert not (tmp_path / "embeddings" / "inclusion.npy").exists()
+    assert version["md5"]["embeddings/inclusion.npy"] is None
+
+
+def test_lead_time_measures_only_actual_stop_dates():
+    import pandas as pd
+    from model_pipeline import lead_time
+    rows = pd.DataFrame({
+        "study_first_submitted_date": ["2019-01-01"] * 3,
+        "stop_date": pd.to_datetime(["2020-01-01", "2021-01-01",
+                                     "2024-01-01"]),
+        "stop_date_source": ["completion", "primary_completion",
+                             "last_update"]})
+    months = lead_time.months_to_stop(rows)
+    assert months.notna().tolist() == [True, True, False]
+
+
 def test_lead_time_summary_leaves_out_after_the_fact():
     import pandas as pd
     from model_pipeline import lead_time
