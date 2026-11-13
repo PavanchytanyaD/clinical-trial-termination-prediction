@@ -17,6 +17,15 @@ data:
     meta: data/processed/structured_features.meta.json
     slices: data/processed/trial_slices.csv
     weights: reports/bias/mitigation/trial_weights.csv   # optional
+    # optional: stop dates for the lead_time stage (never used as features)
+    studies: data/raw/aact_snapshot/studies.txt
+  # BioBERT vectors from the data pipeline's embeddings stage (optional).
+  # Each field is reduced with PCA, fitted on the training set only.
+  embeddings:
+    dir: data/processed/embeddings
+    fields: [title, brief_summary, detailed_description, inclusion,
+             exclusion, outcomes]
+    pca_components: 16      # per field
 
 split:
   # Time-based: the most recently registered trials are the test set, the
@@ -43,6 +52,33 @@ models:
       subsample: [0.7, 0.85, 1.0]
       colsample_bytree: [0.5, 0.7, 1.0]
       min_child_weight: [1, 5, 10]
+  # Same search as xgboost, with the BioBERT text features added: shows how
+  # much the text helps apart from the model type.
+  xgboost_text:
+    family: xgboost
+    text_features: true
+    search: random
+    n_iter: 12
+    space:
+      n_estimators: [200, 400, 800]
+      max_depth: [3, 4, 6, 8]
+      learning_rate: [0.03, 0.05, 0.1]
+      subsample: [0.7, 0.85, 1.0]
+      colsample_bytree: [0.5, 0.7, 1.0]
+      min_child_weight: [1, 5, 10]
+  # Neural network on the structured plus text features (classes balanced,
+  # early stopping on 10% of the training set, 5 seeds averaged). It
+  # overfits fast on this data, so the search favours small layers and a
+  # strong L2 penalty.
+  nn:
+    text_features: true
+    search: random
+    n_iter: 16
+    space:
+      hidden_layer_sizes: [[32], [64], [128], [256], [128, 64]]
+      alpha: [0.3, 1.0, 3.0, 10.0]            # L2 penalty
+      learning_rate_init: [0.0001, 0.0003, 0.001]
+      batch_size: [128, 256]
 
 evaluation:
   threshold: 0.5            # score at or above this counts as "will stop"
@@ -74,6 +110,7 @@ registry:
   serving_images:
     logreg: us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest
     xgboost: us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.2-1:latest
+    nn: us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest
 
 tracking:
   experiment: ctt-model-development

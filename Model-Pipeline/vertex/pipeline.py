@@ -4,8 +4,8 @@ Every stage runs `python -m model_pipeline.run --stage <name>` in the
 model-pipeline image, with the same gs:// work folder, so the graph in the
 console shows each stage as its own box:
 
-    load_data -> train -> validate -> bias -> select -> test -> register
-                                                          \\-> sensitivity
+    load_data -> train -> validate -> bias -> select -> calibrate -> test
+        test -> register, test -> lead_time, test -> sensitivity
 
 Compile only: python vertex/pipeline.py
 (writes vertex/ctt_model_pipeline.json)
@@ -53,7 +53,9 @@ def ctt_model_pipeline(workdir: str, snapshot: str = "latest",
     validate = step("validate", train)
     bias = step("bias", validate)
     select = step("select", bias)
-    test = step("test", select)
+    calibrate = step("calibrate", select)
+    test = step("test", calibrate)
+    step("lead_time", test)
     step("sensitivity", test, cpu="4", memory="16G")
     step("register", test)
 
