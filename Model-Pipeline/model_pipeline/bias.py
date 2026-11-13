@@ -23,7 +23,7 @@ from model_pipeline.train import load_model
 logger = logging.getLogger(__name__)
 
 
-def add_group_threshold_candidates(ctx, candidates, train, columns):
+def add_group_threshold_candidates(ctx, candidates, train):
     """One group_thresholds candidate per unmitigated model."""
     from scripts.bias_model import group_thresholds
 
@@ -34,13 +34,14 @@ def add_group_threshold_candidates(ctx, candidates, train, columns):
     for cand in candidates:
         if cand["mitigation"] != "none":
             continue
+        columns = data.load_columns(ctx, cand)
         s = predict(load_model(ctx, cand),
                     train[columns].to_numpy(dtype=float))
         cuts = group_thresholds(s, train["label"].to_numpy(),
                                 train[b["threshold_slice"]].to_numpy(),
                                 threshold, b["min_stopped"])
         if cuts:
-            extra.append({**cand, "name": f"{cand['family']}"
+            extra.append({**cand, "name": f"{cand['name']}"
                           "+group_thresholds",
                           "mitigation": "group_thresholds",
                           "threshold_slice": b["threshold_slice"],
@@ -115,19 +116,18 @@ def markdown(summary, gaps, b, gate):
 def run(ctx):
     b, gate = ctx.params["bias"], ctx.params["gate"]
     ev = ctx.params["evaluation"]
-    columns = data.load_columns(ctx)
     train, val = data.load_split(ctx, "train"), data.load_split(ctx, "val")
     slice_names = [s for s in ctx.read_json("data/data_version.json")["slices"]
                    if s in val.columns]
 
     candidates = add_group_threshold_candidates(
-        ctx, ctx.read_json("candidates.json"), train, columns)
+        ctx, ctx.read_json("candidates.json"), train)
     ctx.write_json("candidates.json", candidates)
 
     scores, val_metrics = {}, ctx.read_json("reports/val_metrics.json")
     for cand in candidates:
-        s = score_candidate(cand, load_model(ctx, cand), val, columns,
-                            ev["threshold"])
+        s = score_candidate(cand, load_model(ctx, cand), val,
+                            data.load_columns(ctx, cand), ev["threshold"])
         scores[cand["name"]] = s
         if cand["name"] not in val_metrics:
             val_metrics[cand["name"]] = metrics.compute(

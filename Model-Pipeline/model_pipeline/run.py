@@ -4,8 +4,8 @@
     python -m model_pipeline.run --stage train \
         --workdir gs://BUCKET/model-pipeline/runs/RUN_ID
 
-Stages, in order: load_data, train, validate, bias, select, test,
-sensitivity, register. With a gs:// work folder (as on Vertex AI, where each
+Stages, in order: load_data, train, validate, bias, select, calibrate,
+test, lead_time, sensitivity, register. With a gs:// work folder (as on Vertex AI, where each
 stage is its own container) the folder is copied down before the stage and
 back up after it, so the stages hand files to each other through the bucket.
 """
@@ -23,7 +23,8 @@ from model_pipeline import notify
 from model_pipeline.config import Context, load_params
 
 STAGES = {"load_data": "data", "train": "train", "validate": "validate",
-          "bias": "bias", "select": "select", "test": "test_set",
+          "bias": "bias", "select": "select", "calibrate": "calibrate",
+          "test": "test_set", "lead_time": "lead_time",
           "sensitivity": "sensitivity", "register": "registry"}
 LOCAL_WORK = Path("/tmp/ctt-model-work")
 logger = logging.getLogger("model_pipeline")

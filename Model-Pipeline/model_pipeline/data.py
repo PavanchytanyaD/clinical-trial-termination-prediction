@@ -6,6 +6,15 @@ from gs://<bucket>/data-pipeline/state/versions/<snapshot>/ and downloads
 each file by its md5 from the DVC remote, so the model always records which
 data version it was trained on. source "local": the files already pulled
 with `dvc pull preprocess bias` in Data-Pipeline/.
+
+Text features: the BioBERT embeddings of the data version (one 768-number
+vector per text field) are reduced with PCA, fitted on the training set
+only, to data.embeddings.pca_components numbers per field (columns
+txt_<field>_<i>). Only model families with text_features: true use them.
+
+Stop dates: the AACT studies table gives each stopped trial's stop date and
+status. They are kept beside the features for the lead_time stage and never
+used as features (they are written after the trial).
 """
 
 import hashlib
@@ -14,6 +23,8 @@ import logging
 import shutil
 from pathlib import Path
 
+import joblib
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -21,6 +32,7 @@ from model_pipeline import tracking
 
 logger = logging.getLogger(__name__)
 REQUIRED = ("features", "meta", "slices")
+EMBEDDING_FILES = ("ids.txt", "meta.json")
 
 
 # ---------- finding files in a DVC data version ----------
@@ -79,14 +91,29 @@ def latest_snapshot(fs, base):
     return snapshots[-1]
 
 
+def targets(cfg, raw):
+    """{key: (path in dvc.lock, local file)} of every file to get. The
+    embedding files go to raw/embeddings/."""
+    out = {key: (rel, raw / Path(rel).name)
+           for key, rel in cfg["files"].items()}
+    emb = cfg.get("embeddings") or {}
+    if emb.get("dir"):
+        names = [*EMBEDDING_FILES, *(f"{f}.npy" for f in emb["fields"])]
+        for name in names:
+            out[f"embeddings/{name}"] = (f"{emb['dir']}/{name}",
+                                         raw / "embeddings" / name)
+    return out
+
+
 def download(ctx, raw):
     """Get the data files into raw/; returns a data-version record."""
     cfg = ctx.params["data"]
-    files = cfg["files"]
+    files = targets(cfg, raw)
+    (raw / "embeddings").mkdir(parents=True, exist_ok=True)
     if cfg["source"] == "local":
         base = (Path(__file__).resolve().parents[1] / cfg["local_dir"])
         hashes = {}
-        for key, rel in files.items():
+        for key, (rel, dest) in files.items():
             src = base / rel
             if not src.exists():
                 if key in REQUIRED:
@@ -94,8 +121,8 @@ def download(ctx, raw):
                         f"{src} missing: run `dvc pull preprocess bias` "
                         "in Data-Pipeline/")
                 continue
-            shutil.copy(src, raw / Path(rel).name)
-            hashes[key] = hashlib.md5(src.read_bytes()).hexdigest()
+            shutil.copy(src, dest)
+            hashes[key] = _md5(src)
         return {"source": "local", "snapshot": "local", "md5": hashes}
 
     import gcsfs
@@ -108,14 +135,104 @@ def download(ctx, raw):
     lock = yaml.safe_load(fs.cat(lock_path))
     remote = f"{cfg['bucket']}/{cfg['dvc_remote']}"
     hashes = {}
-    for key, rel in files.items():
-        md5 = fetch_from_lock(fs, remote, lock, rel, raw / Path(rel).name)
+    for key, (rel, dest) in files.items():
+        md5 = fetch_from_lock(fs, remote, lock, rel, dest)
         if md5 is None and key in REQUIRED:
             raise FileNotFoundError(f"{rel} is not in gs://{lock_path}")
         hashes[key] = md5
     logger.info("data version %s from gs://%s", snapshot, lock_path)
     return {"source": "lock", "snapshot": snapshot,
             "dvc_lock": f"gs://{lock_path}", "md5": hashes}
+
+
+def _md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+# ---------- text features and stop dates ----------
+
+def load_embeddings(folder, fields):
+    """(nct_ids, {field: float32 array}) or None if the version has none."""
+    folder = Path(folder)
+    if not (folder / "ids.txt").exists():
+        return None
+    ids = (folder / "ids.txt").read_text().split()
+    arrays = {}
+    for field in fields:
+        path = folder / f"{field}.npy"
+        if path.exists():
+            arrays[field] = np.load(path).astype(np.float32)
+    if not arrays:
+        return None
+    return ids, arrays
+
+
+def text_features(parts, embeddings, n_components, seed):
+    """Add txt_<field>_<i> columns to every split. PCA is fitted on the
+    training split only; trials without embeddings get zero vectors.
+    Returns (text columns, fitted reducers)."""
+    from sklearn.decomposition import PCA
+
+    ids, arrays = embeddings
+    position = pd.Series(np.arange(len(ids)), index=ids)
+    columns, reducers = [], {}
+    rows_of = {name: position.reindex(df["nct_id"]).to_numpy()
+               for name, df in parts.items()}
+    for field, array in arrays.items():
+        def vectors(name):
+            pos = rows_of[name]
+            out = np.zeros((len(pos), array.shape[1]), dtype=np.float32)
+            found = ~np.isnan(pos)
+            out[found] = array[pos[found].astype(int)]
+            return out
+
+        k = min(n_components, array.shape[1], len(parts["train"]))
+        pca = PCA(n_components=k, random_state=seed).fit(vectors("train"))
+        names = [f"txt_{field}_{i:02d}" for i in range(k)]
+        for name, df in parts.items():
+            parts[name] = pd.concat(
+                [df, pd.DataFrame(pca.transform(vectors(name)), columns=names,
+                                  index=df.index)], axis=1)
+        columns += names
+        reducers[field] = pca
+        logger.info("%s: %d PCA components keep %.0f%% of the variance",
+                    field, k, 100 * pca.explained_variance_ratio_.sum())
+    return columns, reducers
+
+
+def stop_dates(raw):
+    """nct_id, stop_date, stop_date_source from the AACT studies table, or
+    None without it. The stop date is the actual completion date, else the
+    actual primary completion date, else the last update (withdrawn trials
+    often have neither)."""
+    if not (raw / "studies.txt").exists():
+        return None
+    from src.features.build_text_sample import read_chunks
+
+    cols = ["nct_id", "completion_date", "completion_date_type",
+            "primary_completion_date", "primary_completion_date_type",
+            "last_update_submitted_date"]
+    s = pd.concat(read_chunks(raw, "studies", cols), ignore_index=True)
+    s = s.drop_duplicates("nct_id")
+    choices = [
+        ("completion", s.completion_date,
+         s.completion_date_type.str.upper() == "ACTUAL"),
+        ("primary_completion", s.primary_completion_date,
+         s.primary_completion_date_type.str.upper() == "ACTUAL"),
+        ("last_update", s.last_update_submitted_date, True),
+    ]
+    date = pd.Series(pd.NaT, index=s.index)
+    source = pd.Series(None, index=s.index, dtype=object)
+    for name, values, ok in choices:
+        parsed = pd.to_datetime(values, errors="coerce")
+        use = date.isna() & parsed.notna() & ok
+        date[use], source[use] = parsed[use], name
+    return pd.DataFrame({"nct_id": s.nct_id, "stop_date": date,
+                         "stop_date_source": source})
 
 
 # ---------- splitting ----------
@@ -156,11 +273,12 @@ def run(ctx):
     weights = pd.read_csv(weights_file, dtype={"nct_id": str}) \
         if weights_file.exists() else pd.DataFrame(columns=["nct_id",
                                                             "weight"])
-    summary = {}
+    stops = stop_dates(raw)
+    info = ["overall_status"] if "overall_status" in finished.columns else []
     for name, df in parts.items():
         if df["label"].nunique() < 2:
             raise ValueError(f"the {name} set has only one class")
-        rows = df[["nct_id", "label", "study_first_submitted_date",
+        rows = df[["nct_id", "label", "study_first_submitted_date", *info,
                    *columns]].merge(
             slices[["nct_id", *slice_names]], on="nct_id", how="left")
         for s in slice_names:
@@ -168,6 +286,26 @@ def run(ctx):
         rows = rows.merge(weights[["nct_id", "weight"]], on="nct_id",
                           how="left")
         rows["weight"] = rows["weight"].fillna(1.0)
+        if stops is not None:
+            rows = rows.merge(stops, on="nct_id", how="left")
+        parts[name] = rows
+
+    text_columns, emb_cfg = [], ctx.params["data"].get("embeddings") or {}
+    embeddings = load_embeddings(raw / "embeddings", emb_cfg.get("fields",
+                                                                 []))
+    if embeddings is not None:
+        text_columns, reducers = text_features(
+            parts, embeddings, int(emb_cfg.get("pca_components", 16)),
+            int(ctx.params["seed"]))
+        joblib.dump({"fields": list(reducers), "reducers": reducers,
+                     "columns": text_columns},
+                    ctx.path("data", "text_pca.joblib"))
+    else:
+        logger.warning("no embeddings in this data version; models with "
+                       "text_features use the structured features only")
+
+    summary = {}
+    for name, rows in parts.items():
         rows.to_pickle(ctx.path("data", f"{name}.pkl"))
         dates = pd.to_datetime(rows["study_first_submitted_date"],
                                errors="coerce")
@@ -176,9 +314,12 @@ def run(ctx):
                          "first": str(dates.min().date()),
                          "last": str(dates.max().date())}
 
-    version.update({"n_features": len(columns), "splits": summary,
-                    "slices": slice_names})
+    version.update({"n_features": len(columns),
+                    "n_text_features": len(text_columns),
+                    "has_stop_dates": stops is not None,
+                    "splits": summary, "slices": slice_names})
     ctx.write_json("data/columns.json", columns)
+    ctx.write_json("data/text_columns.json", text_columns)
     ctx.write_json("data/data_version.json", version)
     ctx.update_state(snapshot=version["snapshot"])
 
@@ -186,6 +327,7 @@ def run(ctx):
                               "data_source": version["source"],
                               "features_md5": version["md5"]["features"],
                               "n_features": len(columns),
+                              "n_text_features": len(text_columns),
                               **{f"n_{k}": v["n"]
                                  for k, v in summary.items()}})
     logger.info("splits: %s", {k: v["n"] for k, v in summary.items()})
@@ -196,5 +338,15 @@ def load_split(ctx, name):
     return pd.read_pickle(ctx.path("data", f"{name}.pkl"))
 
 
-def load_columns(ctx):
-    return ctx.read_json("data/columns.json")
+def load_columns(ctx, candidate=None):
+    """Feature columns: the structured ones, plus the text ones for a
+    candidate trained with text_features."""
+    columns = ctx.read_json("data/columns.json")
+    if candidate and candidate.get("text_features"):
+        columns = columns + load_text_columns(ctx)
+    return columns
+
+
+def load_text_columns(ctx):
+    path = ctx.path("data", "text_columns.json")
+    return json.loads(path.read_text()) if path.exists() else []

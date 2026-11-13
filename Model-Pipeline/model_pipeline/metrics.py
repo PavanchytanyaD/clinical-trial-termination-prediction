@@ -13,6 +13,18 @@ def precision_at_k(y, s, share):
     return float(np.mean(np.asarray(y)[top]))
 
 
+def expected_calibration_error(y, p, bins=10):
+    """Mean |stop rate - mean predicted probability| over quantile bins of
+    the predictions (equal predictions share a bin), weighted by bin size."""
+    y, p = np.asarray(y, dtype=float), np.clip(np.asarray(p, float), 0, 1)
+    edges = np.unique(np.quantile(p, np.linspace(0, 1, bins + 1))[1:-1])
+    groups = np.digitize(p, edges, right=True)
+    gaps = [(groups == g).sum() * abs(y[groups == g].mean()
+                                      - p[groups == g].mean())
+            for g in np.unique(groups)]
+    return float(sum(gaps) / len(p))
+
+
 def compute(y, s, threshold=0.5, top_k_share=0.1):
     y = np.asarray(y).astype(int)
     s = np.asarray(s, dtype=float)

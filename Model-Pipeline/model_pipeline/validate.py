@@ -13,12 +13,11 @@ logger = logging.getLogger(__name__)
 
 def run(ctx):
     ev = ctx.params["evaluation"]
-    columns = data.load_columns(ctx)
     val = data.load_split(ctx, "val")
     results, curves = {}, {}
     for cand in ctx.read_json("candidates.json"):
-        s = score_candidate(cand, load_model(ctx, cand), val, columns,
-                            ev["threshold"])
+        s = score_candidate(cand, load_model(ctx, cand), val,
+                            data.load_columns(ctx, cand), ev["threshold"])
         results[cand["name"]] = metrics.compute(
             val["label"], s, ev["threshold"], ev["top_k_share"])
         curves[cand["name"]] = (val["label"].to_numpy(), s)

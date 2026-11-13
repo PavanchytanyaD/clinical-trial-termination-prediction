@@ -42,6 +42,36 @@ def pr_curves(curves, path, title):
     plt.close(fig)
 
 
+def reliability(curves, path, title, bins=10):
+    """Predicted probability against the observed stop rate, per bin of
+    equal size; curves: {name: (y_true, probabilities)}."""
+    from sklearn.calibration import calibration_curve
+    fig, ax = plt.subplots(figsize=(5.5, 5))
+    ax.plot([0, 1], [0, 1], "k:", label="perfectly calibrated")
+    for name, (y, p) in curves.items():
+        rate, mean = calibration_curve(y, np.clip(p, 0, 1), n_bins=bins,
+                                       strategy="quantile")
+        ax.plot(mean, rate, "o-", label=name)
+    ax.set_xlabel("Predicted probability of stopping")
+    ax.set_ylabel("Share of trials that stopped")
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def histogram(values, path, title, xlabel, bins=30):
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(values, bins=bins)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("trials")
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
 def confusion(y, s, threshold, path, title):
     from sklearn.metrics import ConfusionMatrixDisplay
     fig, ax = plt.subplots(figsize=(4.5, 4))
