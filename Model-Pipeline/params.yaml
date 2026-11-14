@@ -77,6 +77,10 @@ registry:
 
 tracking:
   experiment: ctt-model-development
+  # Shared MLflow server or folder for the team, e.g. http://<host>:5000.
+  # Empty: each run writes mlruns/ in its own work folder.
+  # MLFLOW_TRACKING_URI overrides this.
+  uri:
 
 alerts:
   # Secret Manager secret holding the same lines as Data-Pipeline/.env
