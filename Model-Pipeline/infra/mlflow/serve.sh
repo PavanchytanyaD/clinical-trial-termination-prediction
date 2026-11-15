@@ -30,5 +30,5 @@ exec mlflow server \
   --backend-store-uri "${STORE}" \
   --default-artifact-root "${MLFLOW_ARTIFACT_ROOT:?}" \
   --no-serve-artifacts \
-  --workers "${WORKERS:-2}" \
+  --workers "${WORKERS:-1}" \
   --allowed-hosts "${ALLOWED_HOSTS:-ctt-mlflow-*.run.app,localhost,localhost:*,127.0.0.1:*}"

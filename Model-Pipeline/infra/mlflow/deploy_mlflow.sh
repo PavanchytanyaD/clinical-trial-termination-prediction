@@ -133,7 +133,7 @@ EOF
     deploy)
       local args=(--image "${IMAGE}:${TAG}" --region "${REGION}"
                   --service-account "${MLFLOW_SA}" --no-allow-unauthenticated
-                  --port 8080 --cpu 1 --memory 2Gi --min-instances 0
+                  --port 8080 --cpu 1 --memory 4Gi --min-instances 0
                   --timeout 300)
       if [ "${BACKEND}" = "postgres" ]; then
         local conn
