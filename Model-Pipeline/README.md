@@ -125,13 +125,38 @@ kept. The full report (per-group tables, before and after) is
 
 ### Google Cloud run
 
-<!-- CLOUD_RESULTS -->
+Run `run-20261115-133055` (2026-11-15): images built by Cloud Build, every
+stage in the pipeline image on Vertex AI as `pipeline-sa`, MLflow on the
+shared Cloud Run server (runs in Cloud SQL, artifacts in
+`gs://ctt-mlops-project-data/mlflow-artifacts`). `load_data`, `train`,
+`validate` and `bias` ran as Vertex AI Pipelines steps; the `select` step then
+waited over 20 minutes for Vertex AI to provision its machine, so the
+pipeline was cancelled and the remaining stages (`select` to `register`) ran
+in one Vertex AI custom job on the same work folder
+(`gs://ctt-mlops-project-data/model-pipeline/runs/run-20261115-133055/`),
+without training again.
+
+Same result as on the laptop: the same ranking and the same selected model,
+`xgboost_text` (selection score 0.392), with test PR-AUC 0.467, ROC-AUC 0.784,
+recall 0.75, precision in the top 10% 0.56, Brier 0.204 → 0.126 after
+calibration, largest gating gap 0.17 (region, alert). The last digits differ
+from the laptop run (test PR-AUC 0.470) because XGBoost's multithreaded tree
+building is not bit-for-bit identical on other CPUs. `register` uploaded it as
+version 1 of `ctt-termination-model` in the Vertex AI Model Registry, with our
+serving container, and as the first version promoted it to `champion` (aliases
+`default`, `challenger`, `champion`; `reports/registry.json`), and emailed the
+alert "model version 1 promoted to champion".
 
 | | |
 |---|---|
 | Data version `20261115` in the bucket | ![](docs/screenshots/01_gcs_data_version_20261115.png) |
 | Pipeline and serving images built by Cloud Build | ![](docs/screenshots/02_cloud_build_images.png) |
 | Images in Artifact Registry | ![](docs/screenshots/03_artifact_registry_images.png) |
+| The Vertex AI pipeline run, its parameters and service account | ![](docs/screenshots/04_vertex_pipeline_run_summary.png) |
+| Shared MLflow server: the cloud run and one child run per tuning trial | ![](docs/screenshots/05_mlflow_cloud_runs_and_trials.png) |
+| Shared MLflow server: candidates compared, artifacts in GCS | ![](docs/screenshots/06_mlflow_cloud_model_comparison.png) |
+| Vertex AI Model Registry: `ctt-termination-model`, version 1 | ![](docs/screenshots/07_model_registry.png) |
+| Version 1: our serving container, artifact in GCS, predict and health routes | ![](docs/screenshots/08_model_registry_version_details.png) |
 
 ## Assignment items
 
