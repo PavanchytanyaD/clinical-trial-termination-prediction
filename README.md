@@ -13,7 +13,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![Google Cloud](https://img.shields.io/badge/Google%20Cloud-Composer%20%7C%20Vertex%20AI%20%7C%20GCS-4285F4?logo=googlecloud&logoColor=white)
 
-Northeastern University · MLOps (IE 7305) · Data pipeline assignment
+Northeastern University · MLOps (IE 7305) · Data pipeline assignment · [Model pipeline assignment →](Model-Pipeline/README.md)
 
 </div>
 
@@ -34,6 +34,7 @@ Northeastern University · MLOps (IE 7305) · Data pipeline assignment
 9. [Tests and code quality](#tests-and-code-quality)
 10. [Code structure](#code-structure)
 11. [Component details](#component-details)
+12. [Model pipeline (next assignment)](#model-pipeline-next-assignment)
 
 ---
 
@@ -48,6 +49,7 @@ Clinical trials are expensive, and many are stopped early (terminated, withdrawn
 | **Features** | 155 structured design features (phase, design, sponsor, sites, eligibility, conditions) plus BioBERT embeddings of the trial text |
 | **Models (next assignments)** | a classical baseline on the structured features, then BioBERT embeddings + structured features in a neural network; an agent that explains predictions |
 | **This assignment** | the **data pipeline** that produces that data, monthly, versioned and checked |
+| **Model pipeline** | trains, tunes, bias-checks and registers the model on that data: [`Model-Pipeline/`](Model-Pipeline/README.md) |
 
 ---
 
@@ -601,6 +603,14 @@ Cleans the free text: turns AACT's `~` back into line breaks, removes markdown e
 
 Findings, both mitigations and the trade-offs: [docs/bias_report.md](docs/bias_report.md).
 </details>
+
+---
+
+## Model pipeline (next assignment)
+
+The model pipeline lives in its own folder, [`Model-Pipeline/`](Model-Pipeline/README.md), with its own README, setup guide and CI workflow (`.github/workflows/model-pipeline.yml`). It reads a data version this pipeline published, trains and tunes four models (logistic regression, XGBoost, and XGBoost and a neural network on BioBERT text features), checks them for bias with Fairlearn, selects and calibrates the best one, and registers it in the Vertex AI Model Registry. It reuses this pipeline's bias code (`src/bias/`, `Data-Pipeline/scripts/bias_model.py`) and alert emails (`Data-Pipeline/scripts/alerts.py`) without changing them.
+
+The two pipelines run separately: changes under `Model-Pipeline/` start only the model pipeline's workflow, and changes to the data pipeline start only `ci.yml`, except the shared bias and alert code above, which starts both. Documentation changes (`*.md`, `docs/`) start neither.
 
 ---
 

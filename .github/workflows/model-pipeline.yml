@@ -29,8 +29,10 @@ on:
       - "!Model-Pipeline/**/*.md"
       - "!Model-Pipeline/docs/**"
       - "src/bias/**"
+      - "src/features/build_text_sample.py"
       - "configs/**"
       - "Data-Pipeline/scripts/bias_model.py"
+      - "Data-Pipeline/scripts/alerts.py"
       - ".github/workflows/model-pipeline.yml"
   pull_request:
     paths:
@@ -38,8 +40,10 @@ on:
       - "!Model-Pipeline/**/*.md"
       - "!Model-Pipeline/docs/**"
       - "src/bias/**"
+      - "src/features/build_text_sample.py"
       - "configs/**"
       - "Data-Pipeline/scripts/bias_model.py"
+      - "Data-Pipeline/scripts/alerts.py"
       - ".github/workflows/model-pipeline.yml"
   workflow_dispatch:
     inputs:
