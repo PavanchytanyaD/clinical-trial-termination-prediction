@@ -105,6 +105,8 @@ def test_pipeline_runs_end_to_end(tmp_path, monkeypatch):
     assert card["test_tries"][-1]["name"] == card["candidate"]["name"]
     assert (work / "reports/tuning_results.csv").exists()
     assert (work / "artifact/calibrator.joblib").exists()
+    # the packaged model is also stored with the MLflow run
+    assert list((work / "mlruns").rglob("model/model_card.json"))
     assert "No stop dates" in (work / "reports/lead_time/lead_time.md") \
         .read_text()
 

@@ -34,12 +34,14 @@ def _load_secret_env(secret, project):
 
 def alert(ctx, subject, body):
     """Send one alert email; never stops the pipeline if sending fails."""
-    subject = f"[ctt model pipeline] {subject}"
-    logger.info("alert: %s", subject)
+    logger.info("alert: [ctt model pipeline] %s", subject)
     try:
         _load_secret_env(ctx.params["alerts"]["secret"],
                          ctx.params["registry"]["project"])
-        from scripts.alerts import send_alert
+        from scripts import alerts
+        # the data pipeline's code puts its own name in front of the subject
+        alerts.SUBJECT_PREFIX = "[ctt model pipeline]"
+        send_alert = alerts.send_alert
         run_id = ctx.state.get("run_id", "?")
         send_alert(subject, f"Run: {run_id}\n\n{body}")
     except Exception as exc:

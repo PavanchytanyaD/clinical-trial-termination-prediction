@@ -192,6 +192,9 @@ def run(ctx):
         "test_tries": tries,
         "data_version": ctx.read_json("data/data_version.json"),
         "run_id": ctx.state.get("run_id")})
+    # the packaged model (model, calibrator, text PCA, card) with the run, so
+    # every MLflow run holds the exact model version it produced
+    tracking.log_artifacts(ctx, art, "model")
     logger.info("test PR-AUC %.4f ROC-AUC %.4f (%s)", m["pr_auc"],
                 m["roc_auc"], deployed)
     return m
