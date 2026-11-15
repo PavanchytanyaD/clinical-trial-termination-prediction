@@ -84,9 +84,19 @@ def pipeline_run(ctx):
 
 
 def log_params(ctx, params):
+    """Log params once; a value that changed (a stage run again with other
+    settings) is kept as first logged, with a warning."""
     with pipeline_run(ctx) as run:
-        if run:
-            mlflow.log_params({k: str(v)[:500] for k, v in params.items()})
+        if run is None:
+            return
+        new = {k: str(v)[:500] for k, v in params.items()}
+        logged = mlflow.get_run(run.info.run_id).data.params
+        changed = [k for k, v in new.items()
+                   if k in logged and logged[k] != v]
+        if changed:
+            logger.warning("params already logged with other values, "
+                           "kept the first ones: %s", changed)
+        mlflow.log_params({k: v for k, v in new.items() if k not in logged})
 
 
 def log_metrics(ctx, metrics, prefix=""):

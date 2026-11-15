@@ -8,6 +8,10 @@ Stages, in order: load_data, train, validate, bias, select, calibrate,
 test, lead_time, sensitivity, register. With a gs:// work folder (as on Vertex AI, where each
 stage is its own container) the folder is copied down before the stage and
 back up after it, so the stages hand files to each other through the bucket.
+
+`--stage all` always starts a new run: a new run id, a new MLflow run and
+the earlier outputs in the work folder removed (a local mlruns/ folder is
+kept). A single stage continues the run already in the work folder.
 """
 
 import argparse
@@ -17,6 +21,7 @@ import shutil
 import sys
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from model_pipeline import notify
@@ -27,6 +32,8 @@ STAGES = {"load_data": "data", "train": "train", "validate": "validate",
           "test": "test_set", "lead_time": "lead_time",
           "sensitivity": "sensitivity", "register": "registry"}
 LOCAL_WORK = Path("/tmp/ctt-model-work")
+OUTPUTS = ("data", "models", "studies", "reports", "artifact",
+           "candidates.json", "state.json")
 logger = logging.getLogger("model_pipeline")
 
 
@@ -47,6 +54,20 @@ def _sync(remote, local, down):
                 fs.put_file(str(f), f"{remote}/{f.relative_to(local)}")
 
 
+def clean_outputs(work):
+    """Remove an earlier run's outputs from the work folder."""
+    for name in OUTPUTS:
+        p = Path(work) / name
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
+
+
+def new_run_id():
+    return time.strftime("run-%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+
+
 def run_stage(ctx, name):
     module = importlib.import_module(f"model_pipeline.{STAGES[name]}")
     start = time.time()
@@ -64,7 +85,8 @@ def main(argv=None):
                         help="local folder or gs://bucket/path")
     parser.add_argument("--snapshot", help="data version, e.g. 20261027")
     parser.add_argument("--source", choices=["lock", "local"])
-    parser.add_argument("--run-id")
+    parser.add_argument("--run-id", help="id of a new run (default: "
+                        "run-<date>-<time>-<4 hex>)")
     parser.add_argument("--skip-register", action="store_true")
     args = parser.parse_args(argv)
 
@@ -76,10 +98,14 @@ def main(argv=None):
     if remote:
         shutil.rmtree(work, ignore_errors=True)
         _sync(remote, work, down=True)
+    fresh = args.stage == "all"
+    if fresh:
+        clean_outputs(work)
     ctx = Context(work, load_params(), args.snapshot, args.source)
     if "run_id" not in ctx.state:
-        ctx.update_state(run_id=args.run_id or
-                         time.strftime("run-%Y%m%d-%H%M%S"))
+        ctx.update_state(run_id=args.run_id or new_run_id())
+    logger.info("%s run %s in %s", "new" if fresh else "continuing",
+                ctx.state["run_id"], args.workdir)
 
     stages = list(STAGES) if args.stage == "all" else [args.stage]
     if args.skip_register and "register" in stages:
