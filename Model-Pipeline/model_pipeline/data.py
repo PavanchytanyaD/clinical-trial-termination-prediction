@@ -275,8 +275,10 @@ def run(ctx):
     parts = dict(zip(("train", "val", "test"),
                      split_by_time(finished, split["val_share"],
                                    split["test_share"])))
-    slice_names = [s for s in ctx.params["bias"]["slices"]
-                   if s in slices.columns]
+    b = ctx.params["bias"]
+    slice_names = [s for s in dict.fromkeys(
+        b["gating_slices"] + (b.get("report_slices") or []))
+        if s in slices.columns]
     weights_file = raw / "trial_weights.csv"
     weights = pd.read_csv(weights_file, dtype={"nct_id": str}) \
         if weights_file.exists() else pd.DataFrame(columns=["nct_id",

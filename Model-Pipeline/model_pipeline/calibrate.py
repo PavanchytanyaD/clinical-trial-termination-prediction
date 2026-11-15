@@ -63,8 +63,13 @@ def selected_candidate(ctx):
 
 
 def run(ctx):
+    return calibrate(ctx, selected_candidate(ctx))
+
+
+def calibrate(ctx, cand):
+    """Fit and save the calibrator of one candidate on the validation set
+    (also used by the test stage when it falls back to another one)."""
     ev, seed = ctx.params["evaluation"], int(ctx.params["seed"])
-    cand = selected_candidate(ctx)
     val = data.load_split(ctx, "val")
     s = score_candidate(cand, load_model(ctx, cand), val,
                         data.load_columns(ctx, cand), ev["threshold"])

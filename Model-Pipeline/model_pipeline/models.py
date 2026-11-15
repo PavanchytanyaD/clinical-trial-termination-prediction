@@ -122,7 +122,16 @@ def shift_for_groups(scores, groups, cuts, threshold):
 def score_candidate(candidate, model, rows, columns, threshold):
     """Scores of one candidate on a split, with its mitigation applied."""
     s = predict(model, rows[columns].to_numpy(dtype=float))
-    if candidate.get("cuts"):
-        s = shift_for_groups(s, rows[candidate["threshold_slice"]],
-                             candidate["cuts"], threshold)
+    for step in threshold_steps(candidate):
+        s = shift_for_groups(s, rows[step["slice"]], step["cuts"], threshold)
     return s
+
+
+def threshold_steps(candidate):
+    """Per-group thresholds of a candidate, one slice after the other."""
+    if candidate.get("threshold_steps"):
+        return candidate["threshold_steps"]
+    if candidate.get("cuts"):
+        return [{"slice": candidate["threshold_slice"],
+                 "cuts": candidate["cuts"]}]
+    return []

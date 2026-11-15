@@ -68,8 +68,10 @@ def run_pipeline(tmp_path, monkeypatch, models):
     params["data"]["embeddings"].update(fields=["title", "inclusion"],
                                         pca_components=4)
     params["models"] = models
-    params["bias"].update(slices=["region", "phase"], min_group_size=20,
-                          min_stopped=3)
+    # tiny data: small groups qualify, few resamples
+    params["bias"].update(gating_slices=["region", "phase"],
+                          report_slices=[], min_group_size=20,
+                          min_stopped=3, bootstrap=50)
     params["gate"].update(min_pr_auc=0.05, min_roc_auc=0.5,
                           block_bias_gap=1.0)
     monkeypatch.setattr(runner, "load_params", lambda: params)
@@ -89,11 +91,18 @@ def test_pipeline_runs_end_to_end(tmp_path, monkeypatch):
     selection = json.loads((work / "reports/selection.json").read_text())
     assert selection["selected"]["eligible"]
     names = {c["name"] for c in selection["candidates"]}
-    assert {"logreg", "logreg+group_thresholds"} <= names
+    assert {"logreg", "logreg+thresholds_region",
+            "logreg+thresholds_region_phase"} <= names
     card = json.loads((work / "artifact/model_card.json").read_text())
     assert card["test_metrics"]["pr_auc"] > 0
     assert (work / "artifact/model.joblib").exists()
     assert (work / "reports/bias/bias_report.md").exists()
+    assert (work / "reports/bias/gap_recall_logreg.png").exists()
+    summary = json.loads((work / "reports/bias/bias_summary.json")
+                         .read_text())
+    assert summary["logreg"]["status"] != "insufficient data"
+    assert set(summary["logreg"]["checked_slices"]) == {"region", "phase"}
+    assert card["test_tries"][-1]["name"] == card["candidate"]["name"]
     assert (work / "reports/tuning_results.csv").exists()
     assert (work / "artifact/calibrator.joblib").exists()
     assert "No stop dates" in (work / "reports/lead_time/lead_time.md") \
@@ -115,7 +124,7 @@ def test_pipeline_with_text_features_nn_and_lead_time(tmp_path,
     by_name = {c["name"]: c for c in candidates}
     assert by_name["nn"]["text_features"] is True
     assert by_name["logreg"]["text_features"] is False
-    assert "nn+group_thresholds" in by_name
+    assert "nn+thresholds_region" in by_name
 
     card = json.loads((work / "artifact/model_card.json").read_text())
     assert card["calibration"]["method"] in ("sigmoid", "isotonic")

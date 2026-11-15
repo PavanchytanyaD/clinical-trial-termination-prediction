@@ -16,17 +16,41 @@ load_data → train → validate → bias → select → calibrate → test → 
 | `load_data` | Reads a snapshot's `dvc.lock` from the bucket and downloads the features, slices, trial weights, BioBERT embeddings and AACT studies table by md5 from the DVC remote. Splits by registration date: oldest 60% train, next 20% validation, newest 20% test. Reduces each text field's 768-number embedding to 16 PCA components fitted on the training split (`txt_<field>_<i>`). Keeps stop dates and final status beside the features for `lead_time` (never as features). | `data/`, `data/data_version.json`, `data/text_pca.joblib` |
 | `train` | Hyperparameter search per entry in `params.yaml` → `models` (LR, XGBoost, XGBoost with text, neural network), every trial logged to MLflow; best per entry kept, plus a version trained with the bias stage's trial weights. | `models/`, `reports/tuning_results.csv` |
 | `validate` | Every candidate on the validation set: PR-AUC, ROC-AUC, Brier, precision, recall, F1, Precision@K. | `reports/val_metrics.json`, comparison charts |
-| `bias` | Fairlearn per-group metrics on 7 slices (reusing `src/bias/model_slices.py`); adds a per-region threshold candidate for each model. | `reports/bias/` (report, tables, charts) |
-| `select` | Eligible if PR-AUC and ROC-AUC pass the gate and the largest subgroup gap is under the block level; winner = highest PR-AUC − 0.5 × gap. Stops the run if none passes. | `reports/selection.md` |
+| `bias` | Fairlearn per-group metrics on 7 slices (reusing `src/bias/model_slices.py`); gap = overall minus worst qualified group, with a bootstrap interval. Adds per-group threshold candidates (region; region then phase), fitted on the validation set with cross-fitting. | `reports/bias/` (report, tables, charts) |
+| `select` | Eligible if PR-AUC and ROC-AUC pass the gate and the bias gate does not block it; ranked by PR-AUC − 0.5 × largest gating-slice gap. Stops the run if none passes. | `reports/selection.md` |
 | `calibrate` | Fits sigmoid and isotonic calibrators to the selected model's validation scores, keeps the one with the lower 5-fold cross-validated Brier score. Decisions still use the raw score; the calibrated probability is the risk shown to reviewers. | `models/calibrator.joblib`, `reports/calibration/` |
-| `test` | Selected model on the untouched test set; must pass the gate again; reports Brier and calibration error before and after calibration; packages the model with its calibrator (and the text PCA if it uses text). | `reports/test/`, `artifact/` |
+| `test` | Selected model on the untouched test set; must pass the performance and bias gates again, otherwise the next ranked candidate is tried (up to 3, calibrated on the validation set if it is not the selected one); reports Brier and calibration error before and after calibration; packages the model with its calibrator (and the text PCA if it uses text). | `reports/test/`, `artifact/` |
 | `lead_time` | For stopped trials the model flags on the test set: months from registration to stop (median, IQR, share over 12 months). Error analysis: recall per final status and per time to stop, top false positives and negatives. | `reports/lead_time/` |
 | `sensitivity` | SHAP feature importance (and per text field for a model with text features); hyperparameter sensitivity from the search. | `reports/sensitivity/` |
 | `register` | New version in the Vertex AI Model Registry (alias `challenger`); `champion` moves only if the test PR-AUC is not worse than the current champion's. | `reports/registry.json` |
 
-Email alerts (same subscribers as the data pipeline) on: a failed stage, no
+Email alerts (same subscribers as the data pipeline) on: a failed stage,
+candidates blocked by the bias gate or without enough data to check, no
 model passing the gate, bias above the alert level, a model failing on the
-test set, promotion, and a model not promoted.
+test set (and the fallback to the next one), promotion, and a model not
+promoted.
+
+## Bias gate
+
+Settings in `params.yaml` (`bias` and `gate`); code in
+`model_pipeline/gaps.py`.
+
+- **Gap** of a metric (recall, PR-AUC) for a group = overall value minus
+  the group's value. Only groups with at least `min_group_size` trials and
+  `min_stopped` stopped ones count (UNKNOWN never does), and a slice is
+  checked only with at least `min_groups` such groups. Worst group against
+  overall, because best minus worst grows with the number of groups and
+  often hinges on one small group.
+- **Interval**: 90% percentile bootstrap (200 seeded resamples of the
+  trials). A gap counts as above a level only if its lower bound is.
+- **Gating slices** (`region`, `phase`, `sponsor_class`) block a model above
+  `block_bias_gap` (0.25); every slice, including the report slices
+  (`therapeutic_area`, `gender`, `age_group`, `start_era`), raises an alert
+  above `alert_bias_gap` (0.10).
+- **Insufficient data**: if no gating slice can be checked, the candidate
+  is blocked (`insufficient_bias_data: block`) instead of passing with a
+  gap of 0. Small samples need smaller `min_group_size` / `min_stopped`.
+- The same rules apply again on the test set.
 
 ## Assignment items
 
