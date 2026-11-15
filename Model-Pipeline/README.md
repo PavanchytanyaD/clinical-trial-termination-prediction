@@ -22,13 +22,13 @@ load_data → train → validate → bias → select → calibrate → test → 
 | `test` | Selected model on the untouched test set; must pass the performance and bias gates again, otherwise the next ranked candidate is tried (up to 3, calibrated on the validation set if it is not the selected one); reports Brier and calibration error before and after calibration; packages the model with its calibrator (and the text PCA if it uses text). | `reports/test/`, `artifact/` |
 | `lead_time` | For stopped trials the model flags on the test set: months from registration to stop (median, IQR, share over 12 months). Error analysis: recall per final status and per time to stop, top false positives and negatives. | `reports/lead_time/` |
 | `sensitivity` | SHAP feature importance (and per text field for a model with text features); hyperparameter sensitivity from the search. | `reports/sensitivity/` |
-| `register` | New version in the Vertex AI Model Registry (alias `challenger`); `champion` moves only if the test PR-AUC is not worse than the current champion's. | `reports/registry.json` |
+| `register` | New version in the Vertex AI Model Registry, served by our own container (`serving/`), alias `challenger`. The current champion is downloaded and scored on this run's test set; `champion` and the default version move to the new version only if its test PR-AUC on the same rows is not worse (plus `min_improvement`). | `reports/registry.json` |
 
 Email alerts (same subscribers as the data pipeline) on: a failed stage,
 candidates blocked by the bias gate or without enough data to check, no
 model passing the gate, bias above the alert level, a model failing on the
-test set (and the fallback to the next one), promotion, and a model not
-promoted.
+test set (and the fallback to the next one), promotion, a model not
+promoted, a manual rollback, and a failed CI pipeline job.
 
 ## Bias gate
 
@@ -74,7 +74,9 @@ Settings in `params.yaml` (`bias` and `gate`); code in
 | CI/CD: train, validate, bias, registry on push (7.1 to 7.4) | `.github/workflows/model-pipeline.yml` |
 | Alerts (7.5) | `notify.py` |
 | Rollback (7.6) | `registry.py` (champion alias, `rollback` command) |
-| Docker (8.1) | `Dockerfile`, `cloudbuild.yaml` |
+| Docker (8.1) | `Dockerfile`, `serving/Dockerfile`, `cloudbuild.yaml` |
+| Serving the registered model | `serving/app.py`, `model_pipeline/artifact.py` |
+| Shared MLflow server | `infra/mlflow/` |
 
 ## Run it
 
@@ -82,7 +84,7 @@ Settings in `params.yaml` (`bias` and `gate`); code in
 
 ```bash
 cd Data-Pipeline && dvc pull preprocess bias && cd ../Model-Pipeline
-pip install pandas scikit-learn fairlearn -r requirements.txt
+pip install -r requirements.txt
 python -m model_pipeline.run --stage all --source local --skip-register
 ```
 
@@ -92,7 +94,9 @@ Reports are in `Model-Pipeline/runs/local/`.
 
 ```bash
 gcloud builds submit --config Model-Pipeline/cloudbuild.yaml \
-  --substitutions _TAG=$(git rev-parse --short HEAD) .
+  --gcs-source-staging-dir gs://ctt-mlops-project-data/cloudbuild-source \
+  --substitutions _TAG=$(git rev-parse --short=12 HEAD) .
+export MLFLOW_TRACKING_URI=https://ctt-mlflow-...run.app   # optional
 python Model-Pipeline/vertex/submit.py --snapshot latest
 ```
 
@@ -107,7 +111,64 @@ python -m model_pipeline.registry status
 python -m model_pipeline.registry rollback --version 2
 ```
 
-**Tests:** `cd Model-Pipeline && pytest -q tests`
+`rollback` moves the `champion` alias and the default version to that
+version (it works forward too, e.g. to promote a version the stage kept
+back) and sends an alert.
+
+**Tests:** `cd Model-Pipeline && pip install -r requirements-dev.txt && pytest -q tests`
+
+## Images
+
+Both are built from the repository root by `cloudbuild.yaml`:
+
+| Image | Dockerfile | What |
+|---|---|---|
+| `model-pipeline` | `Dockerfile` | every Vertex AI stage. Only `requirements.txt` (pinned, `xgboost-cpu`, no torch), not the repository's requirements with CUDA torch and transformers. |
+| `model-serving` | `serving/Dockerfile` | the serving container of every registry version |
+
+## Serving
+
+Each registry version points at our own container: FastAPI and uvicorn
+(`serving/app.py`), with the same scikit-learn and XGBoost versions as
+training. It loads the version's artifact (the test stage's `model.joblib`,
+`model_card.json`, `calibrator.joblib` and, for a text model,
+`text_pca.joblib`) from `AIP_STORAGE_URI`, listens on `AIP_HTTP_PORT` and
+answers on `AIP_HEALTH_ROUTE` and `AIP_PREDICT_ROUTE`:
+
+```json
+POST /predict
+{"instances": [{"<feature>": 0.3, "...": 1, "region": "US_only", "phase": "PHASE2",
+                "text_embeddings": {"title": [768 numbers], "...": []}}]}
+{"predictions": [{"probability": 0.71, "score": 0.66, "label": 1, "threshold": 0.5,
+                  "calibrated_probability": 0.31,
+                  "groups": {"region": "US_only", "phase": "PHASE2"}}]}
+```
+
+`probability` is the model's own probability. For a group_thresholds model
+`score` and `label` use the per-group thresholds of every step (region,
+then phase), exactly as the pipeline scored it. `calibrated_probability` is
+the calibrator applied to `score`: the risk to show a reviewer. A text
+model takes the data pipeline's BioBERT vectors in `text_embeddings` and
+turns them into its `txt_*` features with the packaged PCA (or takes the
+`txt_*` features directly). Any model object with `predict_proba` loads the
+same way (joblib or pickle). Try it locally:
+
+```bash
+docker build -f Model-Pipeline/serving/Dockerfile -t model-serving .
+docker run -p 8080:8080 -e MODEL_DIR=/model \
+  -v "$PWD/Model-Pipeline/runs/local/artifact:/model:ro" model-serving
+```
+
+## CI
+
+`.github/workflows/model-pipeline.yml`: on every push and pull request that
+changes `Model-Pipeline/`, `src/bias/` or the bias code it reuses, flake8,
+the tests and a compile of the Vertex AI pipeline. On pushes to `main` and
+`model-pipeline` (or a manual run) it then builds both images and
+runs the pipeline on Vertex AI, waiting for the result. The Google Cloud
+steps are skipped when the repository variables `GCP_PROJECT`,
+`WIF_PROVIDER` and `CICD_SA` are not set; `MLFLOW_TRACKING_URI` (variable)
+and the `SMTP_*` / `ALERT_EMAIL_*` secrets are optional.
 
 ## Settings
 

@@ -1,8 +1,15 @@
 """Email alerts, sent with the data pipeline's alert code
-(Data-Pipeline/scripts/alerts.py), so the same subscribers get both."""
+(Data-Pipeline/scripts/alerts.py), so the same subscribers get both.
 
+From a shell (CI uses this when the pipeline job fails; the SMTP_* and
+ALERT_* settings come from the environment):
+    python -m model_pipeline.notify "subject" --body "text"
+"""
+
+import argparse
 import logging
 import os
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -37,3 +44,19 @@ def alert(ctx, subject, body):
         send_alert(subject, f"Run: {run_id}\n\n{body}")
     except Exception as exc:
         logger.warning("alert not sent: %s", exc)
+
+
+def main(argv=None):
+    from model_pipeline.config import Context, load_params
+
+    parser = argparse.ArgumentParser(description="send one alert email")
+    parser.add_argument("subject")
+    parser.add_argument("--body", default="")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO)
+    ctx = Context(tempfile.mkdtemp(prefix="ctt-alert-"), load_params())
+    alert(ctx, args.subject, args.body)
+
+
+if __name__ == "__main__":
+    main()

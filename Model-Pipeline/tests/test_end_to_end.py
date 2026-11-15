@@ -133,6 +133,19 @@ def test_pipeline_with_text_features_nn_and_lead_time(tmp_path,
         assert (work / "artifact/text_pca.joblib").exists()
         assert set(text_cols) <= set(card["feature_columns"])
 
+    # the packaged model scores the test set exactly as the pipeline did
+    import pandas as pd
+
+    from model_pipeline import artifact
+    packaged = artifact.load(work / "artifact")
+    test = pd.read_pickle(work / "data/test.pkl")
+    scored = pd.read_pickle(work / "data/test_scores.pkl")
+    np.testing.assert_allclose(packaged.score_frame(test),
+                               scored["score"], atol=1e-9)
+    np.testing.assert_allclose(
+        packaged.calibrated(packaged.score_frame(test)),
+        scored["probability"], atol=1e-9)
+
     lead = json.loads((work / "reports/lead_time/lead_time.json")
                       .read_text())
     assert lead["true_positives"]["n"] > 0

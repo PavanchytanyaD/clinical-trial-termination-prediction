@@ -1,0 +1,13 @@
+# Prediction server (serving/Dockerfile). The model libraries have the
+# same pins as the training image (../requirements.txt), so a pickled model
+# loads with the versions it was trained with.
+numpy==2.3.3
+scikit-learn==1.9.1
+# xgboost-cpu: the same library without the CUDA build and NCCL (400 MB);
+# it has Linux wheels only, so other systems get xgboost
+xgboost-cpu==3.2.0; sys_platform == "linux"
+xgboost==3.2.0; sys_platform != "linux"
+joblib==1.6.0
+fastapi==0.162.5
+uvicorn==0.54.0
+google-cloud-storage==3.17.1

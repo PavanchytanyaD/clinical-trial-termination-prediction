@@ -1,15 +1,30 @@
-# Builds the model pipeline image and pushes it to Artifact Registry.
+# Builds the model pipeline image and the prediction server image (the
+# Vertex AI serving container of every registered model version) and pushes
+# both to Artifact Registry. The source is staged in the data bucket, as
+# cicd-sa cannot create Cloud Build's default bucket:
 #   gcloud builds submit --config Model-Pipeline/cloudbuild.yaml \
-#     --substitutions _TAG=$(git rev-parse --short HEAD) .
+#     --gcs-source-staging-dir gs://ctt-mlops-project-data/cloudbuild-source \
+#     --substitutions _TAG=$(git rev-parse --short=12 HEAD) .
 substitutions:
   _IMAGE: us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/model-pipeline
+  _SERVING_IMAGE: us-central1-docker.pkg.dev/ctt-mlops-project/ctt-images/model-serving
   _TAG: manual
 steps:
-  - name: gcr.io/cloud-builders/docker
+  - id: pipeline
+    name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
     args: ["build", "-f", "Model-Pipeline/Dockerfile",
            "-t", "${_IMAGE}:${_TAG}", "-t", "${_IMAGE}:latest", "."]
-images: ["${_IMAGE}:${_TAG}", "${_IMAGE}:latest"]
-timeout: 1800s
+  - id: serving
+    name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    waitFor: ["-"]
+    args: ["build", "-f", "Model-Pipeline/serving/Dockerfile",
+           "-t", "${_SERVING_IMAGE}:${_TAG}",
+           "-t", "${_SERVING_IMAGE}:latest", "."]
+images: ["${_IMAGE}:${_TAG}", "${_IMAGE}:latest",
+         "${_SERVING_IMAGE}:${_TAG}", "${_SERVING_IMAGE}:latest"]
+timeout: 2400s
 serviceAccount: projects/ctt-mlops-project/serviceAccounts/cicd-sa@ctt-mlops-project.iam.gserviceaccount.com
 options:
   logging: CLOUD_LOGGING_ONLY

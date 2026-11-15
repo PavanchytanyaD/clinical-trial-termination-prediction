@@ -18,6 +18,8 @@ import os
 from contextlib import contextmanager
 from urllib.parse import urlsplit, urlunsplit
 
+from model_pipeline import mlflow_auth
+
 logger = logging.getLogger(__name__)
 _logged_uris = set()  # log the tracking address once per process
 
@@ -58,6 +60,7 @@ def tracking_uri(ctx):
 
 def _setup(ctx):
     uri = tracking_uri(ctx)
+    mlflow_auth.ensure_token(uri)   # ID token for a Cloud Run server
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(ctx.params["tracking"]["experiment"])
     if uri not in _logged_uris:
