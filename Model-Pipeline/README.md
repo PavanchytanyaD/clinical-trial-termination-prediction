@@ -90,11 +90,16 @@ no critical anomalies; BioBERT embeddings of six text fields per trial.
 | Validation | 3,362 | Jul to Oct 2019 | 18.8% |
 | Test | 3,362 | Oct to Dec 2019 | 18.5% |
 
-A random model's PR-AUC is 0.185 (the stop rate).
+> [!IMPORTANT]
+> **Read PR-AUC against its random baseline, not 0.5.** For PR-AUC a model
+> that guesses at random scores the share of positives (here, trials that
+> stopped early): **0.188 on the validation set and 0.185 on the test set**.
+> The 0.5 baseline belongs to ROC-AUC. So a PR-AUC of 0.47 is about 2.5 times
+> the random baseline. Every PR-AUC table below lists its random baseline in brackets.
 
 ### Candidates on the validation set
 
-| Model | Features | PR-AUC | ROC-AUC | Precision in top 10% |
+| Model | Features | PR-AUC (random 0.188) | ROC-AUC (random 0.5) | Precision in top 10% (random 0.188) |
 |---|---|---|---|---|
 | Logistic regression | structured | 0.455 | 0.747 | 0.52 |
 | XGBoost | structured | 0.472 | 0.758 | 0.55 |
@@ -114,7 +119,7 @@ decides.
 
 ### The selected model on the test set
 
-| | PR-AUC | ROC-AUC | Recall | Precision | Precision in top 10% | Brier raw → calibrated |
+| | PR-AUC (random 0.185) | ROC-AUC (random 0.5) | Recall | Precision (random 0.185) | Precision in top 10% | Brier raw → calibrated |
 |---|---|---|---|---|---|---|
 | Local | 0.470 | 0.785 | 0.77 | 0.33 | 0.55 | 0.204 → 0.126 |
 | Google Cloud | 0.467 | 0.784 | 0.75 | 0.33 | 0.56 | 0.204 → 0.126 |
@@ -223,7 +228,7 @@ Two runs on data version `20261115`, both on the shared MLflow server:
 | `run-20261115-200412` | GitHub Actions (push to the repo) | all ten steps as pipeline steps, 31 minutes | version 2; the champion (version 1) was rescored on the same 3,362 test trials, the tie is "not worse", so version 2 became `champion` |
 
 Both runs picked `xgboost_text` and gave the same test metrics (PR-AUC
-0.467, ROC-AUC 0.784, precision 0.327, recall 0.754, largest bias gap
+0.467 (random baseline 0.185), ROC-AUC 0.784, precision 0.327, recall 0.754, largest bias gap
 0.174), so the pipeline reproduces its result from the same data version.
 
 #### Proof that every component ran
@@ -289,7 +294,7 @@ candidate (numbers from the Google Cloud run):
 
 | Mitigation | How | Effect on XGBoost + text (validation) |
 |---|---|---|
-| Reweighting | trained with the data pipeline's trial weights (small groups weighted up) | gap 0.166 → 0.173, PR-AUC 0.475 → 0.462 |
+| Reweighting | trained with the data pipeline's trial weights (small groups weighted up) | gap 0.166 → 0.173, PR-AUC 0.475 → 0.462 (random 0.188) |
 | Per-group thresholds (region) | one decision threshold per region so each catches the same share of stopped trials; fitted on the validation set with cross-fitting | gap 0.166 → **0.136**, PR-AUC 0.475 → 0.445 |
 | Per-group thresholds (region, then phase) | the same, then per phase | gap 0.166 → 0.174, PR-AUC 0.475 → 0.427 |
 
@@ -429,7 +434,7 @@ where it is shown. "Cloud n" and "Local n" are the numbered screenshots in
 | 4 Charts comparing models, confusion matrix | `plots.py` → `reports/figures/`, `reports/test/` | Local 3 and 4, Cloud 7 |
 | 5 Sensitivity: SHAP and hyperparameters | `sensitivity.py` | Local 6; [Sensitivity analysis](#sensitivity-analysis) |
 | 7.1 CI/CD trains on a push | `.github/workflows/model-pipeline.yml` | Cloud 11 |
-| 7.2 Automated validation against a threshold | validate and test gates (PR-AUC ≥ 0.30, ROC-AUC ≥ 0.60) | Cloud 4 and 11 |
+| 7.2 Automated validation against a threshold | validate and test gates (PR-AUC ≥ 0.30 against a random 0.19, ROC-AUC ≥ 0.60 against a random 0.5) | Cloud 4 and 11 |
 | 7.3 Automated bias detection, alert or block | bias stage in the pipeline (alert 0.10, block 0.25) | Cloud 4; [Bias detection](#how-bias-is-checked) |
 | 7.4 Registry push after validation and bias | `register` stage | Cloud 4, 8 and 9 |
 | 7.5 Notifications | `notify.py` (email), CI failure email | Cloud 10; [SETUP 3](docs/SETUP.md#3-email-alerts) |

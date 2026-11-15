@@ -87,14 +87,14 @@ hinge on one exact setting. Per-hyperparameter sensitivity is in
 
 ## 5. Results
 
-| Model | Features | Val PR-AUC | Test PR-AUC | Test ROC-AUC | Test Precision@10% | Test recall |
+| Model | Features | Val PR-AUC (random 0.188) | Test PR-AUC (random 0.185) | Test ROC-AUC (random 0.5) | Test Precision@10% | Test recall |
 |---|---|---|---|---|---|---|
 | logreg | structured | 0.455 | 0.478 | 0.770 | 0.557 | 0.786 |
 | xgboost | structured | 0.471 | 0.487 | 0.784 | 0.560 | 0.828 |
 | xgboost_text | structured + text | 0.473 | 0.462 | 0.786 | 0.536 | 0.606 |
 | **nn** | structured + text | **0.479** | **0.493** | **0.791** | **0.583** | 0.754 |
 
-Base rate (a random model's PR-AUC): 0.185. Threshold 0.5 on the raw score.
+Random baseline for PR-AUC = the share of stopped trials (0.188 validation, 0.185 test), not 0.5; 0.5 is the random baseline of ROC-AUC. Threshold 0.5 on the raw score.
 
 - The NN is best on every ranking metric on both validation and test. Of
   the 336 trials it ranks most at risk (top 10%), 58% stopped, about 3x
