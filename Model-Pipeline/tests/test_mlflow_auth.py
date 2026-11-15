@@ -78,10 +78,50 @@ def test_gcloud_fallback_for_user_credentials(monkeypatch):
     def no_sa(request, audience):
         raise ValueError("user credentials")
 
+    def no_iam(aud):
+        raise RuntimeError("not a service account")
+
     monkeypatch.setattr(google.oauth2.id_token, "fetch_id_token", no_sa)
+    monkeypatch.setattr(mlflow_auth, "iam_id_token", no_iam)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: type(
         "R", (), {"stdout": jwt(9999) + "\n"})())
     assert mlflow_auth.fetch_id_token(URI) == jwt(9999)
+
+
+def test_iam_credentials_fallback_on_vertex_ai(monkeypatch):
+    """Vertex AI: the metadata server gives no ID token, the IAM
+    Credentials API does (for the job's service account)."""
+    import google.auth
+    import google.oauth2.id_token
+    import requests
+
+    def no_metadata_token(request, audience):
+        raise ValueError("please provide a user-specified service account")
+
+    class Creds:
+        token = "access-token"
+        service_account_email = "pipeline-sa@p.iam.gserviceaccount.com"
+
+        def refresh(self, request):
+            pass
+
+    calls = []
+
+    def post(url, headers, json, timeout):
+        calls.append((url, headers["Authorization"], json["audience"]))
+        return type("R", (), {"raise_for_status": lambda self: None,
+                              "json": lambda self: {"token": jwt(7777)}})()
+
+    monkeypatch.setattr(google.oauth2.id_token, "fetch_id_token",
+                        no_metadata_token)
+    monkeypatch.setattr(google.auth, "default",
+                        lambda scopes=None: (Creds(), "p"))
+    monkeypatch.setattr(requests, "post", post)
+    assert mlflow_auth.fetch_id_token(URI) == jwt(7777)
+    url, auth, aud = calls[0]
+    assert "pipeline-sa@p.iam.gserviceaccount.com:generateIdToken" in url
+    assert auth == "Bearer access-token"
+    assert aud == mlflow_auth.audience(URI)
 
 
 def test_tracking_setup_fetches_a_token(tmp_path, fetches, monkeypatch):

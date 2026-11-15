@@ -47,18 +47,52 @@ def expiry(token):
         return 0.0
 
 
+def iam_id_token(aud):
+    """ID token from the IAM Credentials API, for the service account of
+    the default credentials. Vertex AI training containers run as a service
+    account but their metadata server does not issue ID tokens; the account
+    needs roles/iam.serviceAccountTokenCreator on itself."""
+    import google.auth
+    import google.auth.transport.requests
+    import requests
+
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(google.auth.transport.requests.Request())
+    email = getattr(creds, "service_account_email", None)
+    if not email or email == "default":
+        email = requests.get(
+            "http://metadata.google.internal/computeMetadata/v1/instance/"
+            "service-accounts/default/email",
+            headers={"Metadata-Flavor": "Google"}, timeout=10).text.strip()
+    r = requests.post(
+        "https://iamcredentials.googleapis.com/v1/projects/-/"
+        f"serviceAccounts/{email}:generateIdToken",
+        headers={"Authorization": f"Bearer {creds.token}"},
+        json={"audience": aud, "includeEmail": True}, timeout=30)
+    r.raise_for_status()
+    return r.json()["token"]
+
+
 def fetch_id_token(aud):
-    """ID token for the audience, from the service account credentials or
-    the metadata server; from gcloud for a signed-in user."""
+    """ID token for the audience: from the service account credentials or
+    the metadata server, else from the IAM Credentials API (Vertex AI), else
+    from gcloud for a signed-in user."""
     try:
         import google.auth.transport.requests
         import google.oauth2.id_token
         return google.oauth2.id_token.fetch_id_token(
             google.auth.transport.requests.Request(), aud)
     except Exception as exc:
+        logger.info("google.auth gave no ID token (%s); trying the IAM "
+                    "Credentials API", str(exc)[:200])
+    try:
+        return iam_id_token(aud)
+    except Exception as exc:
         # user credentials (gcloud auth application-default login) cannot
-        # mint ID tokens through google.auth; gcloud can
-        logger.info("google.auth gave no ID token (%s); trying gcloud", exc)
+        # mint ID tokens this way; gcloud can
+        logger.info("IAM Credentials API gave no ID token (%s); trying "
+                    "gcloud", str(exc)[:200])
     out = subprocess.run(["gcloud", "auth", "print-identity-token"],
                          capture_output=True, text=True, timeout=60,
                          check=True)
