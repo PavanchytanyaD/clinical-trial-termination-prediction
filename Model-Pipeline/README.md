@@ -213,15 +213,18 @@ python Model-Pipeline/vertex/submit.py --snapshot 20261115 \
   --mlflow-uri https://ctt-mlflow-xlnvxclr5a-uc.a.run.app
 ```
 
-#### What we ran (run `run-20261115-133055`, 2026-11-15)
+#### What we ran (2026-11-15)
 
-`load_data`, `train`, `validate` and `bias` ran as Vertex AI Pipelines
-steps. The `select` step then waited over 20 minutes for Vertex AI to
-provision a machine of its type, so the pipeline was cancelled and the
-remaining stages (`select` to `register`) ran in one Vertex AI custom job on
-the same work folder, without training again. The result matched the local
-run, and `register` made the model version 1 of `ctt-termination-model`,
-promoted to `champion`.
+Two runs on data version `20261115`, both on the shared MLflow server:
+
+| Run | Started by | How it ran | Result |
+|---|---|---|---|
+| `run-20261115-133055` | `submit.py` by hand | `load_data` to `bias` as pipeline steps; `select` then waited over 20 minutes for a machine, so the pipeline was cancelled and `select` to `register` ran in one custom job on the same work folder (no retraining) | version 1 of `ctt-termination-model`, promoted to `champion` |
+| `run-20261115-200412` | GitHub Actions (push to the repo) | all ten steps as pipeline steps, 31 minutes | version 2; the champion (version 1) was rescored on the same 3,362 test trials, the tie is "not worse", so version 2 became `champion` |
+
+Both runs picked `xgboost_text` and gave the same test metrics (PR-AUC
+0.467, ROC-AUC 0.784, precision 0.327, recall 0.754, largest bias gap
+0.174), so the pipeline reproduces its result from the same data version.
 
 #### Proof that every component ran
 
@@ -231,27 +234,27 @@ promoted to `champion`.
 <td width="50%" valign="top"><b>2. Cloud Build</b>: the pipeline and serving images built<br><img src="docs/screenshots/02_cloud_build_images.png" alt="Cloud Build"><br><br><b>3. Artifact Registry</b>: <code>model-pipeline</code> and <code>model-serving</code> in <code>ctt-images</code><br><img src="docs/screenshots/03_artifact_registry_images.png" alt="Artifact Registry"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>4. Vertex AI Pipelines</b>: the ten-step graph; <code>load_data</code> to <code>bias</code> succeeded here, run as <code>pipeline-sa</code> on data version <code>20261115</code> with the shared MLflow server<br><img src="docs/screenshots/04_vertex_pipeline_graph.png" alt="Vertex AI pipeline graph"></td>
+<td colspan="2" valign="top"><b>4. Vertex AI Pipelines</b>: run <code>run-20261115-200412</code> started by CI, 10/10 steps completed in 31 minutes, run as <code>pipeline-sa</code> on data version <code>20261115</code> with the shared MLflow server<br><img src="docs/screenshots/04_vertex_pipeline_graph.png" alt="Vertex AI pipeline graph"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>5. Vertex AI custom job</b>: <code>select</code> to <code>register</code> on one machine, same image and work folder, finished in 9 minutes<br><img src="docs/screenshots/05_vertex_finish_job.png" alt="Vertex AI custom job"></td>
+<td colspan="2" valign="top"><b>5. Vertex AI custom job</b> (first run): <code>select</code> to <code>register</code> on one machine, same image and work folder, finished in 9 minutes<br><img src="docs/screenshots/05_vertex_finish_job.png" alt="Vertex AI custom job"></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><b>6. Shared MLflow server</b>: the cloud run and one child run per tuning trial<br><img src="docs/screenshots/06_mlflow_cloud_runs_and_trials.png" alt="Cloud MLflow runs and trials"></td>
 <td width="50%" valign="top"><b>7. Shared MLflow server</b>: candidates compared; artifacts stored in Cloud Storage<br><img src="docs/screenshots/07_mlflow_cloud_model_comparison.png" alt="Cloud MLflow model comparison"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>8. Vertex AI Model Registry</b>: <code>ctt-termination-model</code> version 1 (<code>xgboost_text</code>, test PR-AUC 0.467)<br><img src="docs/screenshots/08_model_registry.png" alt="Model Registry"></td>
+<td colspan="2" valign="top"><b>8. Vertex AI Model Registry</b>: <code>ctt-termination-model</code> with version 1 (first run) and version 2 (CI run, now the default); the labels record <code>promoted=true</code>, <code>champion_version=1</code> (the champion it was compared with) and <code>champion_pr_auc_x1000=467</code><br><img src="docs/screenshots/08_model_registry.png" alt="Model Registry"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>9. Version 1</b>: our serving container, the model files in Cloud Storage, <code>/predict</code> and <code>/health</code><br><img src="docs/screenshots/09_model_registry_version_details.png" alt="Model version details"></td>
+<td colspan="2" valign="top"><b>9. Version 2</b>: our serving container (image tag = commit <code>c9441cd7f26a</code>), the model files in Cloud Storage, <code>/predict</code> and <code>/health</code><br><img src="docs/screenshots/09_model_registry_version_details.png" alt="Model version details"></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><b>10. Alert email</b>: sent by the <code>register</code> stage when version 1 became champion<br><img src="docs/screenshots/10_alert_email_champion.png" alt="Alert email"></td>
-<td width="50%" valign="top">The registry entry carries the aliases <code>default</code>, <code>challenger</code> and <code>champion</code> and the labels <code>candidate=xgboost_text</code>, <code>data_snapshot=20261115</code>, <code>test_pr_auc_x1000=467</code>, <code>promoted=true</code>; the decision is in <code>reports/registry.json</code> of the run.</td>
+<td width="50%" valign="top"><b>10. Alert email</b>: sent by the <code>register</code> stage when a version becomes champion<br><img src="docs/screenshots/10_alert_email_champion.png" alt="Alert email"></td>
+<td width="50%" valign="top">Version 2 now carries the aliases <code>default</code>, <code>challenger</code> and <code>champion</code>. The decision is in <code>reports/registry.json</code> of the run: <i>"test PR-AUC 0.4668 >= champion 0.4668"</i>, compared on snapshot <code>20261115</code>, 3,362 test trials. To go back: <code>python -m model_pipeline.registry rollback --version 1</code>.</td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>11. CI/CD</b>: the push to <code>model-pipeline</code> started the workflow by itself; lint and tests passed, Cloud Build built the images and the pipeline started on Vertex AI<br><img src="docs/screenshots/11_github_actions_ci.png" alt="GitHub Actions run"></td>
+<td colspan="2" valign="top"><b>11. CI/CD</b>: the push started the workflow by itself; lint and tests passed (1 min 22 s), then Cloud Build built the images and the pipeline ran on Vertex AI to the end (35 min 45 s); status Success<br><img src="docs/screenshots/11_github_actions_ci.png" alt="GitHub Actions run"></td>
 </tr>
 </table>
 
@@ -428,7 +431,7 @@ where it is shown. "Cloud n" and "Local n" are the numbered screenshots in
 | 7.1 CI/CD trains on a push | `.github/workflows/model-pipeline.yml` | Cloud 11 |
 | 7.2 Automated validation against a threshold | validate and test gates (PR-AUC ≥ 0.30, ROC-AUC ≥ 0.60) | Cloud 4 and 11 |
 | 7.3 Automated bias detection, alert or block | bias stage in the pipeline (alert 0.10, block 0.25) | Cloud 4; [Bias detection](#how-bias-is-checked) |
-| 7.4 Registry push after validation and bias | `register` stage | Cloud 8 and 9 |
+| 7.4 Registry push after validation and bias | `register` stage | Cloud 4, 8 and 9 |
 | 7.5 Notifications | `notify.py` (email), CI failure email | Cloud 10; [SETUP 3](docs/SETUP.md#3-email-alerts) |
 | 7.6 Rollback if the new model is worse | `registry.py` (champion rescored on the same test set; `rollback` command) | Cloud 10; [Registry and rollback](#model-registry-serving-and-rollback) |
 | 8.1 Docker | `Dockerfile`, `serving/Dockerfile`, `cloudbuild.yaml` | Cloud 2 and 3 |
