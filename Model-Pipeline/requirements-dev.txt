@@ -1,4 +1,4 @@
-# Tests, style check and pipeline compilation (CI and laptops):
+# Tests, style check and pipeline compilation (CI and local machines):
 #   pip install -r Model-Pipeline/requirements-dev.txt
 -r requirements.txt
 -r serving/requirements.txt
