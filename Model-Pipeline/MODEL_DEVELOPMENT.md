@@ -191,16 +191,23 @@ review.
   spread over all fields. The top single features are start year,
   FDA-regulated drug or device, and healthy volunteers. Full table:
   `reports/sensitivity/`.
-- **Bias:** in this run **every candidate failed the bias gate**
-  (`block_bias_gap` 0.25). The largest gap is in the `start_era` slice
-  (recall gap of 0.59 to 0.74 between trials started in different eras).
-  With only 2019 registrations, start date is tightly linked to stopping,
-  so this slice mostly measures the data, not unfair treatment. The bias
-  gate is being reworked separately. The results above come from rerunning
-  `select` onward with the block level set to 1.0 for this local
-  evaluation only; `params.yaml` is unchanged. The models with text
-  features had smaller gaps (NN 0.59, `xgboost_text` 0.57 to 0.59) than
-  the structured-only models (XGBoost 0.69, logistic regression 0.74).
+- **Bias:** in the first version of the gate (best minus worst group, any
+  slice could block) **every candidate failed** (`block_bias_gap` 0.25):
+  the largest gap was in `start_era` (recall gap 0.59 to 0.74). With only
+  2019 registrations, start date is tightly linked to stopping, so that
+  slice mostly measures the data, not unfair treatment. The gate is now
+  reworked (README, "Bias gate"): the gap is overall minus the worst
+  qualified group with a 90% bootstrap interval, only `region`, `phase`
+  and `sponsor_class` can block, and `therapeutic_area`, `gender`,
+  `age_group` and `start_era` raise alerts. On the same 2019 data rebuilt
+  on 2026-11-15 (24,235 trials, structured features only, since BioBERT
+  vectors need the GPU stage), all 16 candidates pass with an alert: the
+  largest gating gap is region PR-AUC (non-US trials), 0.16 to 0.21, lower
+  bounds 0.12 to 0.15. Per-group thresholds shrink it (NN 0.186 to 0.167)
+  at a PR-AUC cost (0.467 to 0.449), and the select stage weighs both:
+  `nn+reweighted` was selected (validation PR-AUC 0.469, test 0.483, ROC-AUC
+  0.772). Full tables: `reports/bias/bias_report.md` and
+  `reports/selection.md`.
 
 ## 9. Limitations and next steps
 
