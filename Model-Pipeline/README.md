@@ -235,6 +235,9 @@ promoted to `champion`.
 <td width="50%" valign="top"><b>10. Alert email</b>: sent by the <code>register</code> stage when version 1 became champion<br><img src="docs/screenshots/10_alert_email_champion.png" alt="Alert email"></td>
 <td width="50%" valign="top">The registry entry carries the aliases <code>default</code>, <code>challenger</code> and <code>champion</code> and the labels <code>candidate=xgboost_text</code>, <code>data_snapshot=20261115</code>, <code>test_pr_auc_x1000=467</code>, <code>promoted=true</code>; the decision is in <code>reports/registry.json</code> of the run.</td>
 </tr>
+<tr>
+<td colspan="2" valign="top"><b>11. CI/CD</b>: the push to <code>model-pipeline</code> started the workflow by itself; lint and tests passed, Cloud Build built the images and the pipeline started on Vertex AI<br><img src="docs/screenshots/11_github_actions_ci.png" alt="GitHub Actions run"></td>
+</tr>
 </table>
 
 ---
@@ -372,7 +375,8 @@ of the Vertex AI pipeline. On pushes to `main` and `model-pipeline` (or a
 manual run) it then builds both images with Cloud Build and runs the
 pipeline on Vertex AI, which trains, validates, checks bias and registers;
 the job fails if the validation or bias gate stops the run, and a failed job
-sends an email.
+sends an email (screenshot 11 above shows the run started by a push). Changes
+to Markdown files or `Model-Pipeline/docs/` alone do not start it.
 
 **Email alerts** (`notify.py`, same subscribers as the data pipeline) on: a
 failed stage, a finished run, candidates blocked by the bias gate or without

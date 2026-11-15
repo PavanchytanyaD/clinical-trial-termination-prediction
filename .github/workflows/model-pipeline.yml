@@ -26,6 +26,8 @@ on:
   push:
     paths:
       - "Model-Pipeline/**"
+      - "!Model-Pipeline/**/*.md"
+      - "!Model-Pipeline/docs/**"
       - "src/bias/**"
       - "configs/**"
       - "Data-Pipeline/scripts/bias_model.py"
@@ -33,6 +35,8 @@ on:
   pull_request:
     paths:
       - "Model-Pipeline/**"
+      - "!Model-Pipeline/**/*.md"
+      - "!Model-Pipeline/docs/**"
       - "src/bias/**"
       - "configs/**"
       - "Data-Pipeline/scripts/bias_model.py"
