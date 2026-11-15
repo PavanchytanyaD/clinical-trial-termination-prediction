@@ -52,6 +52,87 @@ Settings in `params.yaml` (`bias` and `gate`); code in
   gap of 0. Small samples need smaller `min_group_size` / `min_stopped`.
 - The same rules apply again on the test set.
 
+## Results on the real data
+
+**Data:** data version `20261115` in
+`gs://ctt-mlops-project-data/data-pipeline/state/versions/`: the AACT
+interventional trials registered in 2019 (24,235 trials; 16,808 finished,
+18.4% of them stopped), all 475 validation checks passed, no critical
+anomalies, BioBERT embeddings of six text fields per trial. Time split by
+registration date: train 10,084 trials (Jan to Jul 2019), validation 3,362
+(Jul to Oct), test 3,362 (Oct to Dec). A random model's PR-AUC is 0.185 (the
+stop rate).
+
+The pipeline ran twice on this data version: on a laptop (`--source local`,
+MLflow in a local folder) and on Google Cloud (Vertex AI Pipelines, shared
+MLflow server on Cloud Run, Vertex AI Model Registry).
+
+**Candidates on the validation set** (best tuning trial of each model):
+
+| Model | Features | PR-AUC | ROC-AUC | Precision in top 10% |
+|---|---|---|---|---|
+| logreg | structured | 0.455 | 0.747 | 0.52 |
+| xgboost | structured | 0.472 | 0.758 | 0.55 |
+| xgboost_text | structured + BioBERT | 0.475 | 0.764 | 0.53 |
+| nn | structured + BioBERT | 0.480 | 0.766 | 0.54 |
+
+Each also has a reweighted version and two per-group threshold versions (16
+candidates in all).
+
+**Selection** (score = PR-AUC − 0.5 × largest gating-slice gap): `nn` is the
+most accurate but has a larger bias gap (0.190) than `xgboost_text` (0.166),
+so `xgboost_text` has the best score (0.392 against 0.385) and is selected.
+
+**Selected model on the test set** (`xgboost_text`, never seen in training or
+selection):
+
+| PR-AUC | ROC-AUC | Recall | Precision | Precision in top 10% | Brier raw → calibrated |
+|---|---|---|---|---|---|
+| 0.470 | 0.785 | 0.77 | 0.33 | 0.55 | 0.204 → 0.126 |
+
+It flags 481 of the 622 stopped test trials, a median of 35 months before
+they stop (89% more than a year ahead). Most important features (SHAP):
+start year, FDA-regulated drug, the title and brief-summary text,
+healthy volunteers.
+
+**Bias** (test set; gap = overall minus the worst group, 90% interval):
+
+| Slice | Role | Worst group | Gap | Status |
+|---|---|---|---|---|
+| region | gating | non-US only | 0.17 (PR-AUC) | alert, below the 0.25 block level |
+| phase | gating | — | ≤ 0.08 | ok |
+| sponsor class | gating | — | ≈ 0.04 | ok |
+| therapeutic area | report | nutritional and metabolic diseases | 0.29 (recall) | alert |
+| start era | report | started 2010 to 2017 | 0.66 (recall) | alert: trials registered in 2019 that started years earlier, a data effect |
+| gender, age group | report | — | small | ok |
+
+Mitigation: per-group thresholds narrow the region gap of `xgboost_text`
+from 0.166 to 0.134 but cost PR-AUC (0.475 to 0.442); reweighting barely
+changes it. The selection score weighs both, so the unmitigated model was
+kept. The full report (per-group tables, before and after) is
+`reports/bias/bias_report.md` of every run.
+
+### Local run (laptop)
+
+| | |
+|---|---|
+| MLflow runs: the pipeline run with one child run per tuning trial | ![](docs/screenshots/local/local_01_mlflow_runs_and_trials.png) |
+| Run overview: selected model, duration | ![](docs/screenshots/local/local_02_mlflow_run_overview.png) |
+| Candidates compared on the validation set | ![](docs/screenshots/local/local_03_mlflow_model_comparison.png) |
+| Confusion matrix on the test set | ![](docs/screenshots/local/local_04_mlflow_test_confusion.png) |
+| PR-AUC gap per slice with the alert and block levels | ![](docs/screenshots/local/local_05_mlflow_test_bias_gaps.png) |
+| SHAP feature importance | ![](docs/screenshots/local/local_06_mlflow_shap.png) |
+
+### Google Cloud run
+
+<!-- CLOUD_RESULTS -->
+
+| | |
+|---|---|
+| Data version `20261115` in the bucket | ![](docs/screenshots/01_gcs_data_version_20261115.png) |
+| Pipeline and serving images built by Cloud Build | ![](docs/screenshots/02_cloud_build_images.png) |
+| Images in Artifact Registry | ![](docs/screenshots/03_artifact_registry_images.png) |
+
 ## Assignment items
 
 | Guideline item | Where |
