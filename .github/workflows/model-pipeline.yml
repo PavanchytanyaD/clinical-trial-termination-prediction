@@ -83,8 +83,12 @@ jobs:
       group: model-pipeline-${{ github.ref }}
       cancel-in-progress: false
     env:
-      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
-      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+      # repository variables override these defaults (the team's project,
+      # as in ci.yml)
+      GCP_PROJECT: ${{ vars.GCP_PROJECT || 'ctt-mlops-project' }}
+      WIF_PROVIDER: ${{ vars.WIF_PROVIDER || 'projects/431597074609/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+      CICD_SA: ${{ vars.CICD_SA || 'cicd-sa@ctt-mlops-project.iam.gserviceaccount.com' }}
+      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI || 'https://ctt-mlflow-xlnvxclr5a-uc.a.run.app' }}
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -92,19 +96,19 @@ jobs:
       - name: Check the Google Cloud settings
         id: gcp
         run: |
-          if [ -n "${{ vars.GCP_PROJECT }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ] \
-             && [ -n "${{ vars.CICD_SA }}" ]; then
+          if [ "${{ github.repository }}" = "PavanchytanyaD/clinical-trial-termination-prediction" ] \
+             || [ -n "${{ vars.GCP_PROJECT }}" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::GCP_PROJECT, WIF_PROVIDER or CICD_SA is not set; the Vertex AI run is skipped"
+            echo "::notice::a fork without GCP_PROJECT, WIF_PROVIDER and CICD_SA: the Vertex AI run is skipped"
           fi
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
         if: steps.gcp.outputs.ready == 'true'
         with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
-          service_account: ${{ vars.CICD_SA }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CICD_SA }}
       - uses: google-github-actions/setup-gcloud@v2
         if: steps.gcp.outputs.ready == 'true'
       - name: Build the images
