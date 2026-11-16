@@ -28,19 +28,18 @@ Northeastern University · MLOps (IE 7305) · Model development assignment
 ## Contents
 
 1. [The model pipeline at a glance](#the-model-pipeline-at-a-glance)
-2. [Results on the real data](#results-on-the-real-data)
-3. [How we ran it: two ways](#how-we-ran-it-two-ways)
+2. [Code structure](#code-structure)
+3. [Results on the real data](#results-on-the-real-data)
+4. [How we ran it: two ways](#how-we-ran-it-two-ways)
    - [Way 1: locally](#way-1-locally)
    - [Way 2: on Google Cloud](#way-2-on-google-cloud)
-4. [Bias detection and mitigation](#bias-detection-and-mitigation)
-5. [Hyperparameter tuning](#hyperparameter-tuning)
-6. [Experiment tracking](#experiment-tracking)
-7. [Sensitivity analysis](#sensitivity-analysis)
-8. [Model registry, serving and rollback](#model-registry-serving-and-rollback)
-9. [CI/CD and alerts](#cicd-and-alerts)
-10. [Assignment checklist](#assignment-checklist)
+5. [Bias detection and mitigation](#bias-detection-and-mitigation)
+6. [Hyperparameter tuning](#hyperparameter-tuning)
+7. [Experiment tracking](#experiment-tracking)
+8. [Sensitivity analysis](#sensitivity-analysis)
+9. [Model registry, serving and rollback](#model-registry-serving-and-rollback)
+10. [CI/CD and alerts](#cicd-and-alerts)
 11. [Settings, tests and adding a model](#settings-tests-and-adding-a-model)
-
 ---
 
 ## The model pipeline at a glance
@@ -73,6 +72,65 @@ load_data → train → validate → bias → select → calibrate → test → 
 > pipeline removes those fields (actual enrollment, stop reason, results),
 > and stop dates are kept beside the features only for the `lead_time`
 > analysis.
+
+---
+
+## Code structure
+
+```
+Model-Pipeline/
+├── model_pipeline/                the pipeline: one module per stage, run as python -m model_pipeline.run
+│   ├── run.py                     runs one stage or all of them (--stage all), new run id, alerts on failure
+│   ├── config.py                  params.yaml and the work folder (local or gs://) shared by all stages
+│   ├── data.py                    load_data: reads a data version's dvc.lock, downloads it, splits by date, text PCA
+│   ├── models.py                  the model families (logreg, XGBoost, XGBoost + text, neural network)
+│   ├── train.py                   train: hyperparameter search per family, every trial an MLflow child run
+│   ├── validate.py                validate: every candidate on the hold-out validation set, comparison charts
+│   ├── bias.py                    bias: Fairlearn per-group metrics, the bias gate, per-group threshold candidates
+│   ├── gaps.py                    subgroup gaps with bootstrap intervals (used by bias and test)
+│   ├── select.py                  select: best model after validation and bias (PR-AUC − 0.5 × gap)
+│   ├── calibrate.py               calibrate: sigmoid or isotonic, whichever has the lower Brier score
+│   ├── test_set.py                test: final check on the untouched test set, fallback, packages the model
+│   ├── lead_time.py               lead_time: how early the model warns, error analysis
+│   ├── sensitivity.py             sensitivity: SHAP feature importance, hyperparameter sensitivity
+│   ├── registry.py                register: Vertex AI Model Registry, champion / challenger, rollback command
+│   ├── artifact.py                the packaged model (model, calibrator, text PCA, model card), used by serving
+│   ├── metrics.py  plots.py       metrics and charts
+│   ├── tracking.py                MLflow logging (params, metrics, charts, the packaged model)
+│   ├── mlflow_auth.py             sign-in to the shared MLflow server on Cloud Run
+│   ├── compare_runs.py            compare runs logged to MLflow
+│   └── notify.py                  email alerts (the data pipeline's alert code)
+├── vertex/                        way 2: Google Cloud
+│   ├── pipeline.py                the ten stages as a Vertex AI Pipeline (Kubeflow Pipelines v2)
+│   ├── submit.py                  compiles the pipeline and starts a run
+│   └── ctt_model_pipeline.json    the compiled pipeline
+├── serving/                       prediction server (the serving container of every registered version)
+│   ├── app.py                     /predict and /health
+│   ├── Dockerfile  requirements.txt
+├── infra/mlflow/                  the team's shared MLflow server (Cloud Run + Cloud SQL + GCS)
+│   ├── deploy_mlflow.sh           all / stop / start / delete
+│   ├── Dockerfile  serve.sh       server image and start command
+│   └── README.md
+├── tests/                         73 tests: every stage, bias gate, fallback, serving, registry, MLflow sign-in
+├── docs/
+│   ├── SETUP.md                   step-by-step setup: local, Google Cloud, email alerts, CI/CD, troubleshooting
+│   ├── experiment_tracking.md     how runs are tracked and compared
+│   └── screenshots/               proof of the cloud run (01-11) and the local run (local/01-06)
+├── Dockerfile                     pipeline image (every Vertex AI step)
+├── cloudbuild.yaml                builds the pipeline and serving images → Artifact Registry
+├── params.yaml                    every setting: data version, splits, search spaces, slices, gates, registry
+├── requirements.txt  requirements-dev.txt
+├── MODEL_DEVELOPMENT.md           model write-up: models, tuning, calibration, lead time, results
+└── README.md                      this file
+```
+
+Shared with the data pipeline (outside this folder, also watched by the
+model pipeline's CI): `src/bias/` (slicing and per-group metrics),
+`configs/bias_config.yaml`, `Data-Pipeline/scripts/bias_model.py`
+(per-group thresholds) and `Data-Pipeline/scripts/alerts.py` (email).
+CI: `.github/workflows/model-pipeline.yml`. Each run writes its outputs
+(`data/`, `models/`, `reports/`, `artifact/`) to the run's work folder, never
+to Git.
 
 ---
 
@@ -410,38 +468,6 @@ failed stage, a finished run, candidates blocked by the bias gate or without
 enough data, no model passing the gate, bias above the alert level, a model
 failing on the test set and the fallback to the next one, a promotion, a
 model not promoted, and a manual rollback.
-
----
-
-## Assignment checklist
-
-Every item of the model development guidelines, where it is implemented and
-where it is shown. "Cloud n" and "Local n" are the numbered screenshots in
-[How we ran it](#how-we-ran-it-two-ways).
-
-| Guideline item | Implemented in | Shown in |
-|---|---|---|
-| 2.1, 8.2 Load data from the data pipeline (versioned) | `model_pipeline/data.py` (reads a data version's `dvc.lock`) | Cloud 1; [Results](#results-on-the-real-data) |
-| 2.2, 8.3 Train several models and select the best | `train.py`, `select.py` (4 models, 16 candidates) | Local 1 to 3, Cloud 6 and 7; [Selection](#selection) |
-| 2.3, 8.4 Validation on a hold-out set with task metrics | `validate.py`, `test_set.py` (PR-AUC, ROC-AUC, recall, precision, F1, Brier, precision@10%) | Local 3 and 4; [Results](#the-selected-model-on-the-test-set) |
-| 2.4, 6.1, 6.2 Bias detection by slicing, Fairlearn | `bias.py`, `gaps.py` (7 slices, bootstrap intervals) | Local 5; [Bias](#bias-of-the-selected-model-test-set) |
-| 2.5, 8.5 Bias-check code, reports, mitigation suggestions | `bias.py` → `reports/bias/bias_report.md`, gap charts | Local 5; [Bias detection and mitigation](#bias-detection-and-mitigation) |
-| 6.3, 6.4 Bias mitigation and documented trade-offs | reweighted and per-group threshold candidates | [Mitigation and trade-offs](#mitigation-and-trade-offs) |
-| 8.6 Selection after bias checking | `select.py` (score = PR-AUC − 0.5 × gap, block level) | [Selection](#selection) |
-| 2.6, 8.7 Push to a model registry | `registry.py` (Vertex AI Model Registry, own serving container) | Cloud 8, 9 and 10 |
-| 3 Hyperparameter tuning, search space documented | `params.yaml` → `models`, `train.py` | [Hyperparameter tuning](#hyperparameter-tuning); Local 1, Cloud 6 |
-| 4 Experiment tracking (MLflow) | `tracking.py`, shared server `infra/mlflow/` | Local 1 and 2, Cloud 6 and 7 |
-| 4 Charts comparing models, confusion matrix | `plots.py` → `reports/figures/`, `reports/test/` | Local 3 and 4, Cloud 7 |
-| 5 Sensitivity: SHAP and hyperparameters | `sensitivity.py` | Local 6; [Sensitivity analysis](#sensitivity-analysis) |
-| 7.1 CI/CD trains on a push | `.github/workflows/model-pipeline.yml` | Cloud 11 |
-| 7.2 Automated validation against a threshold | validate and test gates (PR-AUC ≥ 0.30 against a random 0.19, ROC-AUC ≥ 0.60 against a random 0.5) | Cloud 4 and 11 |
-| 7.3 Automated bias detection, alert or block | bias stage in the pipeline (alert 0.10, block 0.25) | Cloud 4; [Bias detection](#how-bias-is-checked) |
-| 7.4 Registry push after validation and bias | `register` stage | Cloud 4, 8 and 9 |
-| 7.5 Notifications | `notify.py` (email), CI failure email | Cloud 10; [SETUP 3](docs/SETUP.md#3-email-alerts) |
-| 7.6 Rollback if the new model is worse | `registry.py` (champion rescored on the same test set; `rollback` command) | Cloud 10; [Registry and rollback](#model-registry-serving-and-rollback) |
-| 8.1 Docker | `Dockerfile`, `serving/Dockerfile`, `cloudbuild.yaml` | Cloud 2 and 3 |
-| Reproducible setup, local and cloud | | [`docs/SETUP.md`](docs/SETUP.md) |
-| Model development write-up (models, calibration, lead time) | | [`MODEL_DEVELOPMENT.md`](MODEL_DEVELOPMENT.md) |
 
 ---
 
