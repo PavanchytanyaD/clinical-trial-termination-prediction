@@ -101,7 +101,7 @@ Model-Pipeline/
 ├── serving/                     prediction server (app.py: /predict, /health) and its Dockerfile
 ├── infra/mlflow/                shared MLflow server: Cloud Run + Cloud SQL + GCS (deploy_mlflow.sh)
 ├── tests/                       73 tests
-├── docs/                        SETUP.md, experiment_tracking.md, screenshots/
+├── docs/                        SETUP.md, experiment_tracking.md, screenshots/, figures/ (result charts)
 ├── Dockerfile  cloudbuild.yaml  pipeline image; Cloud Build for both images
 ├── params.yaml                  all settings: data version, splits, search spaces, slices, gates, registry
 ├── requirements.txt  requirements-dev.txt
@@ -131,24 +131,44 @@ validation checks passed; BioBERT embeddings of six text fields.
 > 0.188 (validation) and 0.185 (test). 0.5 is ROC-AUC's baseline. A PR-AUC
 > of 0.47 is about 2.5 times random. Baselines are shown in brackets below.
 
-### Candidates on the validation set
+### Candidates on the validation set (Google Cloud run)
 
 | Model | Features | PR-AUC (random 0.188) | ROC-AUC (random 0.5) | Precision in top 10% (random 0.188) |
 |---|---|---|---|---|
 | Logistic regression | structured | 0.455 | 0.747 | 0.52 |
-| XGBoost | structured | 0.472 | 0.758 | 0.55 |
-| XGBoost + text | structured + BioBERT | 0.475 | 0.764 | 0.53 |
-| Neural network + text | structured + BioBERT | **0.480** | **0.766** | 0.54 |
+| XGBoost | structured | 0.470 | 0.756 | 0.56 |
+| XGBoost + text | structured + BioBERT | 0.475 | 0.762 | 0.55 |
+| Neural network + text | structured + BioBERT | **0.480** | **0.768** | 0.54 |
 
 Each also has a reweighted and two per-group threshold versions: 16
 candidates.
 
-### Selection
+<table>
+<tr>
+<td width="60%" valign="top"><b>Every metric, every model</b> (the <code>validate</code> stage's chart)<br><img src="docs/figures/val_model_comparison.png" alt="Candidates compared on the validation set"></td>
+<td width="40%" valign="top"><b>Precision-recall curves</b> (validation)<br><img src="docs/figures/val_pr_curves.png" alt="Validation precision-recall curves"></td>
+</tr>
+</table>
 
-Score = PR-AUC − 0.5 × largest gating-slice gap. The neural network is the
-most accurate but serves non-US trials worse (gap 0.190 vs 0.166), so
-**XGBoost + text** wins (0.392 vs 0.385). Their PR-AUC differs by only
-0.005; the fairness gap decides.
+### How the final model was selected
+
+1. **Validation gate**: PR-AUC ≥ 0.30 and ROC-AUC ≥ 0.60. All 16 pass.
+2. **Bias gate**: blocked if a gating slice (region, phase, sponsor class)
+   is clearly more than 0.25 below overall. None is blocked; all have a
+   region alert.
+3. **Ranking**: score = PR-AUC − 0.5 × largest gating-slice gap (0.1 of gap
+   costs 0.05 of PR-AUC).
+4. **Test set**: the top candidate must pass the same gates on the
+   untouched test set, otherwise the next one is tried.
+
+![Model selection: 16 candidates ranked by selection score](docs/figures/selection_ranking.png)
+
+The neural network is the most accurate (PR-AUC 0.480) but serves non-US
+trials worse (gap 0.190 vs 0.166), so **XGBoost + text** ranks first (score
+0.392 vs 0.385). Their PR-AUC differs by only 0.005; the fairness gap
+decides. On the test set it passed on the first try (PR-AUC 0.467, gap
+0.174), so it is the final model. Full table: `reports/selection.md` of each
+run.
 
 ### The selected model on the test set
 
@@ -157,7 +177,15 @@ most accurate but serves non-US trials worse (gap 0.190 vs 0.166), so
 | Local | 0.470 | 0.785 | 0.77 | 0.33 | 0.55 | 0.204 → 0.126 |
 | Google Cloud | 0.467 | 0.784 | 0.75 | 0.33 | 0.56 | 0.204 → 0.126 |
 
-- Catches about 3 in 4 stopped trials (481 of 622 locally), a median of
+<table>
+<tr>
+<td width="31%" valign="top"><b>Confusion matrix</b> (test, threshold 0.5)<br><img src="docs/figures/test_confusion.png" alt="Test confusion matrix"></td>
+<td width="34%" valign="top"><b>Precision-recall</b> (test)<br><img src="docs/figures/test_pr_curve.png" alt="Test precision-recall curve"></td>
+<td width="35%" valign="top"><b>Calibration</b>: raw score vs calibrated probability (test)<br><img src="docs/figures/test_reliability.png" alt="Test reliability"></td>
+</tr>
+</table>
+
+- Catches about 3 in 4 stopped trials (469 of 622 in the cloud run, matrix above), a median of
   **35 months** before they stop (89% more than a year ahead).
 - Top features (SHAP): start year, FDA-regulated drug, title and summary
   text, healthy volunteers. The six text fields together outweigh all
