@@ -2,7 +2,7 @@
 
 # Model Pipeline: Predicting Early Termination of Clinical Trials
 
-**Trains, tunes, validates, bias-checks, selects, calibrates and registers the model that predicts, at registration, whether a clinical trial will stop early. It reads an exact data version published by the [data pipeline](../Data-Pipeline/README.md) and runs locally or on Google Cloud (Vertex AI).**
+**Trains, tunes, validates, bias-checks, selects, calibrates and registers the model that predicts, at registration, whether a clinical trial will stop early. It reads an exact data version from the [data pipeline](../Data-Pipeline/README.md) and runs locally or on Google Cloud (Vertex AI).**
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.9-F7931E?logo=scikitlearn&logoColor=white)
@@ -20,10 +20,10 @@ Northeastern University · MLOps (IE 7305) · Model development assignment
 ---
 
 > [!TIP]
-> **Want to run it yourself?** [`docs/SETUP.md`](docs/SETUP.md) walks through
-> every step, locally and on Google Cloud, with a check after each one:
-> Python environment, data access, the shared MLflow server, email alerts
-> (with screenshots), the Vertex AI run, CI/CD and troubleshooting.
+> **Run it yourself:** [`docs/SETUP.md`](docs/SETUP.md) has every step,
+> locally and on Google Cloud, with a check after each: environment, data
+> access, MLflow server, email alerts (with screenshots), Vertex AI, CI/CD,
+> troubleshooting.
 
 ## Contents
 
@@ -40,13 +40,14 @@ Northeastern University · MLOps (IE 7305) · Model development assignment
 9. [Model registry, serving and rollback](#model-registry-serving-and-rollback)
 10. [CI/CD and alerts](#cicd-and-alerts)
 11. [Settings, tests and adding a model](#settings-tests-and-adding-a-model)
+
 ---
 
 ## The model pipeline at a glance
 
-Ten stages, run in order. Every stage reads and writes one work folder (a
-local folder, or `gs://ctt-mlops-project-data/model-pipeline/runs/<run_id>/`
-on Google Cloud), so any stage can be rerun on its own.
+Ten stages sharing one work folder (local, or
+`gs://ctt-mlops-project-data/model-pipeline/runs/<run_id>/`), so any stage
+can be rerun on its own.
 
 ```
 load_data → train → validate → bias → select → calibrate → test → register
@@ -54,24 +55,23 @@ load_data → train → validate → bias → select → calibrate → test → 
                                                               └→ sensitivity
 ```
 
-| Stage | What it does | Outputs (in the run's work folder) |
+| Stage | What it does | Outputs |
 |---|---|---|
-| `load_data` | Reads a data version's `dvc.lock` from the bucket and downloads the features, slices, trial weights, BioBERT embeddings and AACT studies table by md5 from the DVC remote. Splits by registration date: oldest 60% train, next 20% validation, newest 20% test. Reduces each text field's 768-number embedding to 16 PCA components fitted on the training split (`txt_<field>_<i>`). | `data/`, `data/data_version.json`, `data/text_pca.joblib` |
-| `train` | Hyperparameter search per model entry (logistic regression, XGBoost, XGBoost with text, neural network with text), every trial logged to MLflow; the best of each entry is kept, plus a version trained with the data pipeline's trial weights. | `models/`, `reports/tuning_results.csv` |
-| `validate` | Every candidate on the validation set: PR-AUC, ROC-AUC, Brier, precision, recall, F1, precision in the top 10%. | `reports/val_metrics.json`, comparison charts |
-| `bias` | Fairlearn per-group metrics on 7 slices; gap = overall minus the worst qualified group, with a bootstrap interval. Adds per-group threshold candidates (region; region then phase), fitted on the validation set with cross-fitting. | `reports/bias/` (report, tables, charts) |
-| `select` | Eligible if PR-AUC and ROC-AUC pass the gate and the bias gate does not block it; ranked by PR-AUC − 0.5 × largest gating-slice gap. Stops the run if none passes. | `reports/selection.md` |
-| `calibrate` | Fits sigmoid and isotonic calibrators to the selected model's validation scores and keeps the one with the lower cross-validated Brier score. | `models/calibrator.joblib`, `reports/calibration/` |
-| `test` | The selected model on the untouched test set; it must pass the performance and bias gates again, otherwise the next ranked candidate is tried (up to 3). Packages the model with its calibrator and text PCA. | `reports/test/`, `artifact/` |
-| `lead_time` | How long before a trial stops the model flags it; error analysis by final status and time to stop. | `reports/lead_time/` |
-| `sensitivity` | SHAP feature importance (and per text field) and hyperparameter sensitivity from the search. | `reports/sensitivity/` |
-| `register` | New version in the Vertex AI Model Registry with our own serving container. The current champion is rescored on this run's test set; the new version becomes `champion` only if it is not worse. | `reports/registry.json` |
+| `load_data` | Reads a data version's `dvc.lock` and downloads its features, slices, trial weights, BioBERT embeddings and studies table from the DVC remote. Splits by registration date (60% train, 20% validation, 20% test). Reduces each text field's 768-number embedding to 16 PCA components fitted on train. | `data/` |
+| `train` | Hyperparameter search for logistic regression, XGBoost, XGBoost + text and a neural network + text, every trial logged to MLflow. Keeps the best of each, plus a version trained with the data pipeline's trial weights. | `models/`, `reports/tuning_results.csv` |
+| `validate` | Every candidate on the validation set: PR-AUC, ROC-AUC, Brier, precision, recall, F1, precision in the top 10%. | `reports/val_metrics.json`, charts |
+| `bias` | Fairlearn metrics per group on 7 slices; gap = overall minus worst group, with a bootstrap interval. Adds per-group threshold candidates. | `reports/bias/` |
+| `select` | Keeps candidates that pass the performance and bias gates; ranks them by PR-AUC − 0.5 × largest gating-slice gap. Stops the run if none passes. | `reports/selection.md` |
+| `calibrate` | Sigmoid or isotonic calibration, whichever has the lower cross-validated Brier score. | `reports/calibration/` |
+| `test` | The selected model on the untouched test set, with the same gates; if it fails, the next ranked candidate is tried (up to 3). Packages the model. | `reports/test/`, `artifact/` |
+| `lead_time` | How long before a trial stops the model flags it; error analysis. | `reports/lead_time/` |
+| `sensitivity` | SHAP feature importance and hyperparameter sensitivity. | `reports/sensitivity/` |
+| `register` | New version in the Vertex AI Model Registry; becomes `champion` only if not worse than the current champion on the same test set. | `reports/registry.json` |
 
 > [!NOTE]
-> The model never sees information recorded after a trial ends: the data
-> pipeline removes those fields (actual enrollment, stop reason, results),
-> and stop dates are kept beside the features only for the `lead_time`
-> analysis.
+> The model never sees information recorded after a trial ends (actual
+> enrollment, stop reason, results). Stop dates are kept only for the
+> `lead_time` analysis.
 
 ---
 
@@ -79,68 +79,46 @@ load_data → train → validate → bias → select → calibrate → test → 
 
 ```
 Model-Pipeline/
-├── model_pipeline/                the pipeline: one module per stage, run as python -m model_pipeline.run
-│   ├── run.py                     runs one stage or all of them (--stage all), new run id, alerts on failure
-│   ├── config.py                  params.yaml and the work folder (local or gs://) shared by all stages
-│   ├── data.py                    load_data: reads a data version's dvc.lock, downloads it, splits by date, text PCA
-│   ├── models.py                  the model families (logreg, XGBoost, XGBoost + text, neural network)
-│   ├── train.py                   train: hyperparameter search per family, every trial an MLflow child run
-│   ├── validate.py                validate: every candidate on the hold-out validation set, comparison charts
-│   ├── bias.py                    bias: Fairlearn per-group metrics, the bias gate, per-group threshold candidates
-│   ├── gaps.py                    subgroup gaps with bootstrap intervals (used by bias and test)
-│   ├── select.py                  select: best model after validation and bias (PR-AUC − 0.5 × gap)
-│   ├── calibrate.py               calibrate: sigmoid or isotonic, whichever has the lower Brier score
-│   ├── test_set.py                test: final check on the untouched test set, fallback, packages the model
-│   ├── lead_time.py               lead_time: how early the model warns, error analysis
-│   ├── sensitivity.py             sensitivity: SHAP feature importance, hyperparameter sensitivity
-│   ├── registry.py                register: Vertex AI Model Registry, champion / challenger, rollback command
-│   ├── artifact.py                the packaged model (model, calibrator, text PCA, model card), used by serving
-│   ├── metrics.py  plots.py       metrics and charts
-│   ├── tracking.py                MLflow logging (params, metrics, charts, the packaged model)
-│   ├── mlflow_auth.py             sign-in to the shared MLflow server on Cloud Run
-│   ├── compare_runs.py            compare runs logged to MLflow
-│   └── notify.py                  email alerts (the data pipeline's alert code)
-├── vertex/                        way 2: Google Cloud
-│   ├── pipeline.py                the ten stages as a Vertex AI Pipeline (Kubeflow Pipelines v2)
-│   ├── submit.py                  compiles the pipeline and starts a run
-│   └── ctt_model_pipeline.json    the compiled pipeline
-├── serving/                       prediction server (the serving container of every registered version)
-│   ├── app.py                     /predict and /health
-│   ├── Dockerfile  requirements.txt
-├── infra/mlflow/                  the team's shared MLflow server (Cloud Run + Cloud SQL + GCS)
-│   ├── deploy_mlflow.sh           all / stop / start / delete
-│   ├── Dockerfile  serve.sh       server image and start command
-│   └── README.md
-├── tests/                         73 tests: every stage, bias gate, fallback, serving, registry, MLflow sign-in
-├── docs/
-│   ├── SETUP.md                   step-by-step setup: local, Google Cloud, email alerts, CI/CD, troubleshooting
-│   ├── experiment_tracking.md     how runs are tracked and compared
-│   └── screenshots/               proof of the cloud run (01-11) and the local run (local/01-06)
-├── Dockerfile                     pipeline image (every Vertex AI step)
-├── cloudbuild.yaml                builds the pipeline and serving images → Artifact Registry
-├── params.yaml                    every setting: data version, splits, search spaces, slices, gates, registry
+├── model_pipeline/              one module per stage (python -m model_pipeline.run)
+│   ├── run.py                   runs one stage or all; alerts on failure
+│   ├── config.py                params.yaml and the shared work folder
+│   ├── data.py                  load_data: data version, date split, text PCA
+│   ├── models.py                model families and how they score
+│   ├── train.py                 train: hyperparameter search, one MLflow child run per trial
+│   ├── validate.py              validate: candidates on the validation set
+│   ├── bias.py  gaps.py         bias: per-group metrics, bootstrap gaps, bias gate, threshold candidates
+│   ├── select.py                select: best model after validation and bias
+│   ├── calibrate.py             calibrate: sigmoid or isotonic
+│   ├── test_set.py              test: final check, fallback, packaging
+│   ├── lead_time.py             lead_time: how early it warns
+│   ├── sensitivity.py           sensitivity: SHAP, hyperparameters
+│   ├── registry.py              register: champion / challenger, rollback
+│   ├── artifact.py              the packaged model (model, calibrator, text PCA, model card)
+│   ├── tracking.py  mlflow_auth.py  compare_runs.py   MLflow logging, sign-in, run comparison
+│   ├── metrics.py  plots.py     metrics and charts
+│   └── notify.py                email alerts
+├── vertex/                      Vertex AI Pipeline: pipeline.py, submit.py, compiled JSON
+├── serving/                     prediction server (app.py: /predict, /health) and its Dockerfile
+├── infra/mlflow/                shared MLflow server: Cloud Run + Cloud SQL + GCS (deploy_mlflow.sh)
+├── tests/                       73 tests
+├── docs/                        SETUP.md, experiment_tracking.md, screenshots/
+├── Dockerfile  cloudbuild.yaml  pipeline image; Cloud Build for both images
+├── params.yaml                  all settings: data version, splits, search spaces, slices, gates, registry
 ├── requirements.txt  requirements-dev.txt
-├── MODEL_DEVELOPMENT.md           model write-up: models, tuning, calibration, lead time, results
-└── README.md                      this file
+└── MODEL_DEVELOPMENT.md         model write-up: models, tuning, calibration, lead time
 ```
 
-Shared with the data pipeline (outside this folder, also watched by the
-model pipeline's CI): `src/bias/` (slicing and per-group metrics),
-`configs/bias_config.yaml`, `Data-Pipeline/scripts/bias_model.py`
-(per-group thresholds) and `Data-Pipeline/scripts/alerts.py` (email).
-CI: `.github/workflows/model-pipeline.yml`. Each run writes its outputs
-(`data/`, `models/`, `reports/`, `artifact/`) to the run's work folder, never
-to Git.
+Shared with the data pipeline (and watched by this CI): `src/bias/`,
+`configs/bias_config.yaml`, `Data-Pipeline/scripts/bias_model.py` and
+`alerts.py`. Run outputs go to the work folder, never to Git.
 
 ---
 
 ## Results on the real data
 
-**Data version `20261115`** in
-`gs://ctt-mlops-project-data/data-pipeline/state/versions/`: the AACT
-interventional trials registered in 2019. 24,235 trials, 16,808 of them
-finished, 18.4% of those stopped early; all 475 validation checks passed,
-no critical anomalies; BioBERT embeddings of six text fields per trial.
+**Data version `20261115`**: AACT interventional trials registered in 2019.
+24,235 trials, 16,808 finished, 18.4% of those stopped early; all 475
+validation checks passed; BioBERT embeddings of six text fields.
 
 | Split (by registration date) | Trials | Registered | Stopped |
 |---|---|---|---|
@@ -149,11 +127,9 @@ no critical anomalies; BioBERT embeddings of six text fields per trial.
 | Test | 3,362 | Oct to Dec 2019 | 18.5% |
 
 > [!IMPORTANT]
-> **Read PR-AUC against its random baseline, not 0.5.** For PR-AUC a model
-> that guesses at random scores the share of positives (here, trials that
-> stopped early): **0.188 on the validation set and 0.185 on the test set**.
-> The 0.5 baseline belongs to ROC-AUC. So a PR-AUC of 0.47 is about 2.5 times
-> the random baseline. Every PR-AUC table below lists its random baseline in brackets.
+> **PR-AUC's random baseline is the share of stopped trials, not 0.5:**
+> 0.188 (validation) and 0.185 (test). 0.5 is ROC-AUC's baseline. A PR-AUC
+> of 0.47 is about 2.5 times random. Baselines are shown in brackets below.
 
 ### Candidates on the validation set
 
@@ -164,16 +140,15 @@ no critical anomalies; BioBERT embeddings of six text fields per trial.
 | XGBoost + text | structured + BioBERT | 0.475 | 0.764 | 0.53 |
 | Neural network + text | structured + BioBERT | **0.480** | **0.766** | 0.54 |
 
-Each model also has a reweighted version and two per-group threshold
-versions: 16 candidates in all.
+Each also has a reweighted and two per-group threshold versions: 16
+candidates.
 
 ### Selection
 
 Score = PR-AUC − 0.5 × largest gating-slice gap. The neural network is the
-most accurate but serves non-US trials worse (gap 0.190) than XGBoost + text
-(0.166), so **XGBoost + text** has the best score (0.392 against 0.385) and
-is selected. Their PR-AUC differs by 0.005, within noise; the fairness gap
-decides.
+most accurate but serves non-US trials worse (gap 0.190 vs 0.166), so
+**XGBoost + text** wins (0.392 vs 0.385). Their PR-AUC differs by only
+0.005; the fairness gap decides.
 
 ### The selected model on the test set
 
@@ -182,16 +157,13 @@ decides.
 | Local | 0.470 | 0.785 | 0.77 | 0.33 | 0.55 | 0.204 → 0.126 |
 | Google Cloud | 0.467 | 0.784 | 0.75 | 0.33 | 0.56 | 0.204 → 0.126 |
 
-- It catches about three in four stopped test trials (481 of 622 in the
-  local run). For the 344 of them with a recorded stop date, it flags them a
-  median of **35 months** before they stop (89% more than a year ahead).
-- Most important features (SHAP): start year, FDA-regulated drug, the
-  title and brief-summary text, healthy volunteers. Together the six text
-  fields carry more of the model's SHAP attribution than all structured
-  features combined.
-- The last digits differ between the local and the cloud run because
-  XGBoost's multithreaded tree building is not bit-for-bit identical on
-  other CPUs; the ranking and the selected model are the same.
+- Catches about 3 in 4 stopped trials (481 of 622 locally), a median of
+  **35 months** before they stop (89% more than a year ahead).
+- Top features (SHAP): start year, FDA-regulated drug, title and summary
+  text, healthy volunteers. The six text fields together outweigh all
+  structured features.
+- Local and cloud differ in the last digits (XGBoost multithreading on
+  different CPUs); ranking and selected model are the same.
 
 ### Bias of the selected model (test set)
 
@@ -201,21 +173,18 @@ decides.
 | Phase | gating | — | ≤ 0.08 | ✅ ok |
 | Sponsor class | gating | — | ≈ 0.04 | ✅ ok |
 | Therapeutic area | report | nutritional and metabolic diseases | 0.29 (recall) | ⚠️ alert |
-| Start era | report | started 2010 to 2017 | 0.66 (recall) | ⚠️ alert: trials registered in 2019 that started years earlier, a data effect |
+| Start era | report | started 2010 to 2017 | 0.66 (recall) | ⚠️ alert: 2019 registrations of old trials, a data effect |
 | Gender, age group | report | — | small | ✅ ok |
-
-Details and mitigation in [Bias detection and mitigation](#bias-detection-and-mitigation).
 
 ---
 
 ## How we ran it: two ways
 
-Both runs used the same code, the same data version (`20261115`) and the
-same settings.
+Same code, data version (`20261115`) and settings both ways.
 
 ### Way 1: locally
 
-From the repository root (full steps and checks: [SETUP 1](docs/SETUP.md#1-run-it-locally)):
+From the repository root ([SETUP 1](docs/SETUP.md#1-run-it-locally)):
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
@@ -226,98 +195,86 @@ python -m model_pipeline.run --stage all --source lock --snapshot 20261115 --ski
 MLFLOW_ALLOW_FILE_STORE=true mlflow ui --backend-store-uri runs/local/mlruns   # http://127.0.0.1:5000
 ```
 
-The run takes about 3 minutes. Reports go to `Model-Pipeline/runs/local/`,
-MLflow runs to `runs/local/mlruns/`. The registry stage is skipped; it needs
-Google Cloud.
+About 3 minutes; reports in `runs/local/`, MLflow runs in
+`runs/local/mlruns/`. The registry stage needs Google Cloud, so it is skipped.
 
 <table>
 <tr>
 <td width="50%" valign="top"><b>1. MLflow runs</b>: the pipeline run with one child run per tuning trial<br><img src="docs/screenshots/local/local_01_mlflow_runs_and_trials.png" alt="Local MLflow runs and trials"></td>
-<td width="50%" valign="top"><b>2. Run overview</b>: selected model <code>xgboost_text</code>, 1.2 minutes<br><img src="docs/screenshots/local/local_02_mlflow_run_overview.png" alt="Local MLflow run overview"></td>
+<td width="50%" valign="top"><b>2. Run overview</b>: selected model <code>xgboost_text</code><br><img src="docs/screenshots/local/local_02_mlflow_run_overview.png" alt="Local MLflow run overview"></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><b>3. Candidates compared</b> on the validation set<br><img src="docs/screenshots/local/local_03_mlflow_model_comparison.png" alt="Model comparison chart"></td>
-<td width="50%" valign="top"><b>4. Confusion matrix</b> of the selected model on the test set<br><img src="docs/screenshots/local/local_04_mlflow_test_confusion.png" alt="Test confusion matrix"></td>
+<td width="50%" valign="top"><b>3. Candidates compared</b> (validation)<br><img src="docs/screenshots/local/local_03_mlflow_model_comparison.png" alt="Model comparison chart"></td>
+<td width="50%" valign="top"><b>4. Confusion matrix</b> (test)<br><img src="docs/screenshots/local/local_04_mlflow_test_confusion.png" alt="Test confusion matrix"></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><b>5. Bias</b>: PR-AUC gap per slice with the alert (0.1) and block (0.25) levels<br><img src="docs/screenshots/local/local_05_mlflow_test_bias_gaps.png" alt="Bias gap per slice"></td>
-<td width="50%" valign="top"><b>6. Sensitivity</b>: the 20 most important features (SHAP)<br><img src="docs/screenshots/local/local_06_mlflow_shap.png" alt="SHAP feature importance"></td>
+<td width="50%" valign="top"><b>5. Bias</b>: PR-AUC gap per slice, alert (0.1) and block (0.25) levels<br><img src="docs/screenshots/local/local_05_mlflow_test_bias_gaps.png" alt="Bias gap per slice"></td>
+<td width="50%" valign="top"><b>6. Sensitivity</b>: top 20 features (SHAP)<br><img src="docs/screenshots/local/local_06_mlflow_shap.png" alt="SHAP feature importance"></td>
 </tr>
 </table>
 
 ### Way 2: on Google Cloud
 
-#### What we deployed
-
-| Component | Google Cloud service | What it does |
+| Component | Google Cloud service | Role |
 |---|---|---|
-| Pipeline and serving images | Cloud Build → Artifact Registry (`ctt-images`) | `model-pipeline` runs every stage; `model-serving` serves every registered version |
-| Pipeline | Vertex AI Pipelines (Kubeflow) | one step per stage, as `pipeline-sa` (`vertex/pipeline.py`) |
-| Data and work folders | Cloud Storage `ctt-mlops-project-data` | the data version (DVC), each run's work folder, MLflow artifacts |
-| Experiment tracking | MLflow on Cloud Run + Cloud SQL (PostgreSQL) | one shared server for the team (`infra/mlflow/`) |
-| Model registry | Vertex AI Model Registry | versions with `champion` / `challenger` aliases |
-| Alerts | Secret Manager (`ctt-pipeline-env`) + Gmail SMTP | email on failures, bias alerts, promotion, rollback |
+| Images | Cloud Build → Artifact Registry (`ctt-images`) | `model-pipeline` runs the stages; `model-serving` serves every version |
+| Pipeline | Vertex AI Pipelines (Kubeflow) | one step per stage, as `pipeline-sa` |
+| Storage | Cloud Storage `ctt-mlops-project-data` | data versions (DVC), work folders, MLflow artifacts |
+| Tracking | MLflow on Cloud Run + Cloud SQL | one shared server for the team |
+| Registry | Vertex AI Model Registry | versions with `champion` / `challenger` aliases |
+| Alerts | Secret Manager (`ctt-pipeline-env`) + Gmail SMTP | failure, bias, promotion and rollback emails |
 
-#### Commands
-
-Full steps, from an empty project to a registered model, with a check after
-each: [SETUP 2](docs/SETUP.md#2-run-it-on-google-cloud). In short, from the
-repository root:
+From the repository root ([SETUP 2](docs/SETUP.md#2-run-it-on-google-cloud) has every step):
 
 ```bash
-# images
 gcloud builds submit --config Model-Pipeline/cloudbuild.yaml \
   --gcs-source-staging-dir gs://ctt-mlops-project-data/cloudbuild-source \
-  --substitutions _TAG=$(git rev-parse --short=12 HEAD) .
-# shared MLflow server (once)
-./Model-Pipeline/infra/mlflow/deploy_mlflow.sh all
-# run the pipeline
+  --substitutions _TAG=$(git rev-parse --short=12 HEAD) .          # images
+./Model-Pipeline/infra/mlflow/deploy_mlflow.sh all                  # MLflow server (once)
 python Model-Pipeline/vertex/submit.py --snapshot 20261115 \
-  --mlflow-uri https://ctt-mlflow-xlnvxclr5a-uc.a.run.app
+  --mlflow-uri https://ctt-mlflow-xlnvxclr5a-uc.a.run.app          # run the pipeline
 ```
 
 #### What we ran (2026-11-15)
 
-Two runs on data version `20261115`, both on the shared MLflow server:
-
 | Run | Started by | How it ran | Result |
 |---|---|---|---|
-| `run-20261115-133055` | `submit.py` by hand | `load_data` to `bias` as pipeline steps; `select` then waited over 20 minutes for a machine, so the pipeline was cancelled and `select` to `register` ran in one custom job on the same work folder (no retraining) | version 1 of `ctt-termination-model`, promoted to `champion` |
-| `run-20261115-200412` | GitHub Actions (push to the repo) | all ten steps as pipeline steps, 31 minutes | version 2; the champion (version 1) was rescored on the same 3,362 test trials, the tie is "not worse", so version 2 became `champion` |
+| `run-20261115-133055` | `submit.py` | `load_data` to `bias` as pipeline steps; Vertex AI had no machine for `select` for 20+ minutes, so `select` to `register` ran in one custom job on the same work folder (no retraining) | version 1, `champion` |
+| `run-20261115-200412` | GitHub Actions (push) | all ten steps, 31 minutes | version 2; tied version 1 on the same 3,362 test trials ("not worse"), so it became `champion` |
 
-Both runs picked `xgboost_text` and gave the same test metrics (PR-AUC
-0.467 (random baseline 0.185), ROC-AUC 0.784, precision 0.327, recall 0.754, largest bias gap
-0.174), so the pipeline reproduces its result from the same data version.
+Both picked `xgboost_text` with identical test metrics (PR-AUC 0.467
+(random 0.185), ROC-AUC 0.784, precision 0.327, recall 0.754, bias gap
+0.174): the run is reproducible.
 
 #### Proof that every component ran
 
 <table>
 <tr>
-<td width="50%" valign="top"><b>1. Cloud Storage</b>: data version <code>20261115</code>, published by the data pipeline<br><img src="docs/screenshots/01_gcs_data_version_20261115.png" alt="Data version in the bucket"></td>
-<td width="50%" valign="top"><b>2. Cloud Build</b>: the pipeline and serving images built<br><img src="docs/screenshots/02_cloud_build_images.png" alt="Cloud Build"><br><br><b>3. Artifact Registry</b>: <code>model-pipeline</code> and <code>model-serving</code> in <code>ctt-images</code><br><img src="docs/screenshots/03_artifact_registry_images.png" alt="Artifact Registry"></td>
+<td width="50%" valign="top"><b>1. Cloud Storage</b>: data version <code>20261115</code> from the data pipeline<br><img src="docs/screenshots/01_gcs_data_version_20261115.png" alt="Data version in the bucket"></td>
+<td width="50%" valign="top"><b>2. Cloud Build</b>: both images built<br><img src="docs/screenshots/02_cloud_build_images.png" alt="Cloud Build"><br><br><b>3. Artifact Registry</b>: <code>model-pipeline</code> and <code>model-serving</code><br><img src="docs/screenshots/03_artifact_registry_images.png" alt="Artifact Registry"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>4. Vertex AI Pipelines</b>: run <code>run-20261115-200412</code> started by CI, 10/10 steps completed in 31 minutes, run as <code>pipeline-sa</code> on data version <code>20261115</code> with the shared MLflow server<br><img src="docs/screenshots/04_vertex_pipeline_graph.png" alt="Vertex AI pipeline graph"></td>
+<td colspan="2" valign="top"><b>4. Vertex AI Pipelines</b>: the CI run, 10/10 steps in 31 minutes, as <code>pipeline-sa</code> with the shared MLflow server<br><img src="docs/screenshots/04_vertex_pipeline_graph.png" alt="Vertex AI pipeline graph"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>5. Vertex AI custom job</b> (first run): <code>select</code> to <code>register</code> on one machine, same image and work folder, finished in 9 minutes<br><img src="docs/screenshots/05_vertex_finish_job.png" alt="Vertex AI custom job"></td>
+<td colspan="2" valign="top"><b>5. Vertex AI custom job</b> (first run): <code>select</code> to <code>register</code> on one machine, 9 minutes<br><img src="docs/screenshots/05_vertex_finish_job.png" alt="Vertex AI custom job"></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><b>6. Shared MLflow server</b>: the cloud run and one child run per tuning trial<br><img src="docs/screenshots/06_mlflow_cloud_runs_and_trials.png" alt="Cloud MLflow runs and trials"></td>
-<td width="50%" valign="top"><b>7. Shared MLflow server</b>: candidates compared; artifacts stored in Cloud Storage<br><img src="docs/screenshots/07_mlflow_cloud_model_comparison.png" alt="Cloud MLflow model comparison"></td>
+<td width="50%" valign="top"><b>6. Shared MLflow server</b>: the run and one child run per trial<br><img src="docs/screenshots/06_mlflow_cloud_runs_and_trials.png" alt="Cloud MLflow runs and trials"></td>
+<td width="50%" valign="top"><b>7. Shared MLflow server</b>: candidates compared; artifacts in Cloud Storage<br><img src="docs/screenshots/07_mlflow_cloud_model_comparison.png" alt="Cloud MLflow model comparison"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>8. Vertex AI Model Registry</b>: <code>ctt-termination-model</code> with version 1 (first run) and version 2 (CI run, now the default); the labels record <code>promoted=true</code>, <code>champion_version=1</code> (the champion it was compared with) and <code>champion_pr_auc_x1000=467</code><br><img src="docs/screenshots/08_model_registry.png" alt="Model Registry"></td>
+<td colspan="2" valign="top"><b>8. Vertex AI Model Registry</b>: versions 1 and 2 (default); labels <code>promoted=true</code>, <code>champion_version=1</code> (the one it was compared with), <code>champion_pr_auc_x1000=467</code><br><img src="docs/screenshots/08_model_registry.png" alt="Model Registry"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>9. Version 2</b>: our serving container (image tag = commit <code>c9441cd7f26a</code>), the model files in Cloud Storage, <code>/predict</code> and <code>/health</code><br><img src="docs/screenshots/09_model_registry_version_details.png" alt="Model version details"></td>
+<td colspan="2" valign="top"><b>9. Version 2</b>: our serving container (tag = commit <code>c9441cd7f26a</code>), model files in Cloud Storage, <code>/predict</code> and <code>/health</code><br><img src="docs/screenshots/09_model_registry_version_details.png" alt="Model version details"></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><b>10. Alert email</b>: sent by the <code>register</code> stage when a version becomes champion<br><img src="docs/screenshots/10_alert_email_champion.png" alt="Alert email"></td>
-<td width="50%" valign="top">Version 2 now carries the aliases <code>default</code>, <code>challenger</code> and <code>champion</code>. The decision is in <code>reports/registry.json</code> of the run: <i>"test PR-AUC 0.4668 >= champion 0.4668"</i>, compared on snapshot <code>20261115</code>, 3,362 test trials. To go back: <code>python -m model_pipeline.registry rollback --version 1</code>.</td>
+<td width="50%" valign="top"><b>10. Alert email</b> from <code>register</code> when a version becomes champion<br><img src="docs/screenshots/10_alert_email_champion.png" alt="Alert email"></td>
+<td width="50%" valign="top">Version 2 has the aliases <code>default</code>, <code>challenger</code> and <code>champion</code>. Decision in <code>reports/registry.json</code>: <i>"test PR-AUC 0.4668 >= champion 0.4668"</i> on 3,362 test trials. Rollback: <code>python -m model_pipeline.registry rollback --version 1</code>.</td>
 </tr>
 <tr>
-<td colspan="2" valign="top"><b>11. CI/CD</b>: the push started the workflow by itself; lint and tests passed (1 min 22 s), then Cloud Build built the images and the pipeline ran on Vertex AI to the end (35 min 45 s); status Success<br><img src="docs/screenshots/11_github_actions_ci.png" alt="GitHub Actions run"></td>
+<td colspan="2" valign="top"><b>11. CI/CD</b>: started by a push; lint and tests (1 min 22 s), images, then the full Vertex AI run (35 min 45 s); Success<br><img src="docs/screenshots/11_github_actions_ci.png" alt="GitHub Actions run"></td>
 </tr>
 </table>
 
@@ -327,48 +284,43 @@ Both runs picked `xgboost_text` and gave the same test metrics (PR-AUC
 
 ### How bias is checked
 
-Settings in `params.yaml` (`bias` and `gate`); code in `model_pipeline/bias.py` and `gaps.py`.
+Settings: `params.yaml` (`bias`, `gate`). Code: `bias.py`, `gaps.py`.
 
-- **Slices**: region, phase, sponsor class, therapeutic area, gender,
-  age group, start era. The data has one row per trial, so eligibility
-  gender and age group stand in for demographics.
-- **Gap** of a metric (recall, PR-AUC) for a group = overall value minus the
-  group's value. Only groups with at least 100 trials and 10 stopped ones
-  count (UNKNOWN never does). Worst group against overall, because best
-  minus worst grows with the number of groups and often hinges on one small
-  group.
-- **Interval**: 90% bootstrap interval (200 seeded resamples). A gap counts
-  as above a level only if its lower bound is.
-- **Gating slices** (region, phase, sponsor class) **block** a model above
-  0.25; any slice raises an **alert** (email) above 0.10.
-- **Not enough data**: if no gating slice can be checked, the model is
-  blocked rather than passing with a gap of 0.
-- The same rules apply again on the test set.
+- **Slices**: region, phase, sponsor class, therapeutic area, gender, age
+  group, start era. Eligibility gender and age stand in for demographics
+  (one row per trial).
+- **Gap** (recall, PR-AUC) = overall minus a group's value. Only groups with
+  ≥ 100 trials and ≥ 10 stopped count (never UNKNOWN). Worst group vs
+  overall, because best minus worst grows with the number of groups.
+- **Interval**: 90% bootstrap (200 resamples); a gap is above a level only
+  if its lower bound is.
+- **Levels**: gating slices (region, phase, sponsor class) **block** above
+  0.25; any slice sends an **alert** above 0.10. A model with no checkable
+  gating slice is blocked, not passed. Applied again on the test set.
 
 ### Mitigation and trade-offs
 
-Two mitigations are trained for every model and compared like any other
-candidate (numbers from the Google Cloud run):
+Two mitigations are trained for every model and compared as candidates
+(cloud run, XGBoost + text, validation):
 
-| Mitigation | How | Effect on XGBoost + text (validation) |
+| Mitigation | How | Effect |
 |---|---|---|
-| Reweighting | trained with the data pipeline's trial weights (small groups weighted up) | gap 0.166 → 0.173, PR-AUC 0.475 → 0.462 (random 0.188) |
-| Per-group thresholds (region) | one decision threshold per region so each catches the same share of stopped trials; fitted on the validation set with cross-fitting | gap 0.166 → **0.136**, PR-AUC 0.475 → 0.445 |
+| Reweighting | data pipeline's trial weights (small groups up) | gap 0.166 → 0.173, PR-AUC 0.475 → 0.462 (random 0.188) |
+| Per-group thresholds (region) | one threshold per region so each catches the same share of stopped trials; cross-fitted on validation | gap 0.166 → **0.136**, PR-AUC 0.475 → 0.445 |
 | Per-group thresholds (region, then phase) | the same, then per phase | gap 0.166 → 0.174, PR-AUC 0.475 → 0.427 |
 
-Thresholds close recall gaps but cost precision and overall PR-AUC. The
-selection score (PR-AUC − 0.5 × gap) weighs both: here the accuracy lost
-outweighed the gap closed, so the unmitigated model was kept. Every run
-writes the full comparison (per-group tables before and after) to
+Thresholds close recall gaps but cost precision and PR-AUC. The selection
+score weighs both; here the accuracy lost outweighed the gap closed, so the
+unmitigated model was kept. Full before/after tables:
 `reports/bias/bias_report.md`.
 
 ---
 
 ## Hyperparameter tuning
 
-Grid search for logistic regression, random search for the others; every
-trial is scored on the validation set (PR-AUC) and logged to MLflow as a
-child run. The search spaces are in `params.yaml` → `models`:
+Grid search for logistic regression, random search for the rest; each
+trial scored by validation PR-AUC and logged to MLflow. Spaces in
+`params.yaml` → `models`:
 
 | Model | Search | Trials | Space |
 |---|---|---|---|
@@ -377,41 +329,32 @@ child run. The search spaces are in `params.yaml` → `models`:
 | XGBoost + text | random | 12 | same as XGBoost |
 | Neural network + text | random | 16 | `hidden_layer_sizes` (32), (64), (128), (256), (128, 64); `alpha` 0.3/1/3/10; `learning_rate_init` 0.0001/0.0003/0.001; `batch_size` 128/256 |
 
-Every trial's values and score: `reports/tuning_results.csv`. More on the
-models and choices in [`MODEL_DEVELOPMENT.md`](MODEL_DEVELOPMENT.md).
+All trials: `reports/tuning_results.csv`. Model choices:
+[`MODEL_DEVELOPMENT.md`](MODEL_DEVELOPMENT.md).
 
 ---
 
 ## Experiment tracking
 
-Every pipeline run is one MLflow run in the experiment
-`ctt-model-development`, with one child run per tuning trial. It records:
-
-- hyperparameters and validation metrics of every trial;
-- validation, bias and test metrics of every candidate;
-- the data version (snapshot and file checksums), the selected model and the
-  registry version as tags;
-- the charts and reports (comparison, PR curves, confusion matrix,
-  reliability, bias gaps, SHAP) and the packaged model as artifacts.
-
-On Google Cloud all runs go to one shared MLflow server on Cloud Run
-(`infra/mlflow/`), so the team compares runs in one place; locally they
-go to a local folder. `model_pipeline/compare_runs.py` compares runs from
-the command line ([`docs/experiment_tracking.md`](docs/experiment_tracking.md)).
+Each pipeline run is one MLflow run in `ctt-model-development`, with a child
+run per trial. It logs every trial's hyperparameters and metrics, every
+candidate's validation, bias and test metrics, the data version, selected
+model and registry version (tags), and the charts, reports and packaged
+model (artifacts). On Google Cloud all runs go to the team's shared server;
+`compare_runs.py` compares runs from the command line
+([`docs/experiment_tracking.md`](docs/experiment_tracking.md)).
 
 ---
 
 ## Sensitivity analysis
 
-- **Features (SHAP)** on the selected model: start year matters most, then
-  FDA-regulated drug, then the BioBERT text of the title and brief summary,
-  then healthy volunteers. Per text field: brief summary, outcomes and
-  title carry the most.
-- **Hyperparameters**: for each hyperparameter, the spread of the mean
-  validation PR-AUC across its values. The neural network depends most on
-  its layer sizes (spread 0.059), then `alpha` (0.039) and the learning
-  rate (0.033); XGBoost on `max_depth` (0.021); logistic regression barely
-  depends on `C` (0.001).
+- **Features (SHAP)**: start year, then FDA-regulated drug, title and
+  summary text, healthy volunteers. Top text fields: brief summary,
+  outcomes, title.
+- **Hyperparameters**: spread of mean validation PR-AUC across each
+  hyperparameter's values. Neural network: layer sizes 0.059, `alpha`
+  0.039, learning rate 0.033; XGBoost: `max_depth` 0.021; logistic
+  regression: `C` 0.001.
 
 Charts and tables: `reports/sensitivity/`.
 
@@ -419,15 +362,13 @@ Charts and tables: `reports/sensitivity/`.
 
 ## Model registry, serving and rollback
 
-- **Registry**: every run that passes the gates uploads a new version to the
-  Vertex AI Model Registry with alias `challenger`. The current champion is
-  downloaded and **rescored on this run's test set**; the new version gets
-  `champion` and becomes the default only if its test PR-AUC on the same
-  rows is not worse. Otherwise the champion stays and an alert says why.
-- **Serving**: every version runs our own container (`serving/app.py`,
-  FastAPI) with the training versions of scikit-learn and XGBoost. It
-  applies the per-group thresholds, returns the calibrated probability, and
-  accepts BioBERT vectors directly for a text model:
+- **Registry**: each passing run uploads a version as `challenger`. The
+  champion is **rescored on this run's test set**; the new version becomes
+  `champion` (and default) only if its PR-AUC is not worse, otherwise an
+  alert says why.
+- **Serving**: our container (`serving/app.py`, FastAPI) applies the
+  per-group thresholds, returns the calibrated probability and accepts
+  BioBERT vectors for text models:
 
   ```json
   POST /predict
@@ -438,7 +379,7 @@ Charts and tables: `reports/sensitivity/`.
                     "groups": {"region": "US_only", "phase": "PHASE2"}}]}
   ```
 
-- **Rollback**: if a promoted model turns out worse, move `champion` back:
+- **Rollback**:
 
   ```bash
   cd Model-Pipeline
@@ -450,36 +391,29 @@ Charts and tables: `reports/sensitivity/`.
 
 ## CI/CD and alerts
 
-**GitHub Actions** (`.github/workflows/model-pipeline.yml`): on every push
-or pull request that changes the model code, flake8, the tests and a compile
-of the Vertex AI pipeline. On pushes to `main` and `model-pipeline` (or a
-manual run) it then builds both images with Cloud Build and runs the
-pipeline on Vertex AI, which trains, validates, checks bias and registers;
-the job fails if the validation or bias gate stops the run, and a failed job
-sends an email (screenshot 11 above shows the run started by a push). Changes
-to Markdown files or `Model-Pipeline/docs/` alone do not start it.
+**GitHub Actions** (`.github/workflows/model-pipeline.yml`): every push or
+pull request that changes model code runs flake8, the tests and a pipeline
+compile. Pushes to `main` and `model-pipeline` (or a manual run) then build
+the images and run the full pipeline on Vertex AI; the job fails if a gate
+stops the run and emails on failure. Markdown and `docs/` changes alone do
+not start it. Setup: [SETUP 3](docs/SETUP.md#3-email-alerts) (alert
+subscribers, Gmail app password) and [SETUP 4](docs/SETUP.md#4-cicd-with-github-actions) (CI in a fork).
 
-To subscribe to the alerts or change who gets them, follow
-[SETUP 3](docs/SETUP.md#3-email-alerts) (Gmail app password, with
-screenshots). To set up CI in a fork: [SETUP 4](docs/SETUP.md#4-cicd-with-github-actions).
-
-**Email alerts** (`notify.py`, same subscribers as the data pipeline) on: a
-failed stage, a finished run, candidates blocked by the bias gate or without
-enough data, no model passing the gate, bias above the alert level, a model
-failing on the test set and the fallback to the next one, a promotion, a
-model not promoted, and a manual rollback.
+**Email alerts** (`notify.py`, same subscribers as the data pipeline): failed
+stage, finished run, candidates blocked or without enough data, no model
+passing, bias above the alert level, test-set failure and fallback,
+promotion, no promotion, manual rollback.
 
 ---
 
 ## Settings, tests and adding a model
 
-- **Settings**: everything is in `params.yaml`: data version, split shares,
-  search spaces, threshold, slices, gate levels and registry names.
+- **Settings**: all in `params.yaml`.
 - **Tests**: `cd Model-Pipeline && pip install -r requirements-dev.txt && pytest -q tests`
-  (73 tests: every stage, the bias gate, fallback, calibration, serving,
-  registry promotion and rollback, MLflow login).
-- **Adding a model**: write a build function in `model_pipeline/models.py`
-  that returns an object with `fit(X, y, sample_weight)` and
-  `predict_proba(X)`, add it to `FAMILIES`, and add its search space under
-  `models` in `params.yaml`. It is then tuned, validated, bias-checked and
-  compared like the others; `text_features: true` adds the BioBERT text.
+  (73 tests: every stage, bias gate, fallback, calibration, serving,
+  registry, MLflow sign-in).
+- **Adding a model**: add a build function returning an object with
+  `fit(X, y, sample_weight)` and `predict_proba(X)` to `FAMILIES` in
+  `models.py`, and its search space under `models` in `params.yaml`. It is
+  then tuned, validated, bias-checked and compared like the others
+  (`text_features: true` adds the BioBERT text).
